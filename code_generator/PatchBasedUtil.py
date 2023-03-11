@@ -25,10 +25,11 @@ def getPatchParams(layers, split_idx, n_patch):
 
     resolution = max(layers[0].get_layer_info()["input_h"], layers[0].get_layer_info()["input_w"])
     layer_cnt = layers[patch_params["layer_cnt"]].get_layer_info()
+    print(f"last layer: {layer_cnt['op']}, output_h = {layer_cnt['output_h']}")
     out_shape = max(layer_cnt["input_h"], layer_cnt["input_w"])
     feat_stride = resolution // out_shape
     grain_size = out_shape // n_patch
-
+    print('grain_size: ',grain_size, 'feat_stride: ',feat_stride)
     patch_params["single_rf"] = compute_receptive_field(layers, patch_params["layer_cnt"], 1)
     patch_params["output_c"] = layer_cnt["input_c"]
     patch_params["output_h"] = layer_cnt["output_h"]

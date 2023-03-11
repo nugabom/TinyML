@@ -29,7 +29,8 @@ from mcunet.mcunet.model_zoo import download_tflite
 # 1: Let's first build our pretrained VWW model
 # 2: To deploy the model on MCU, we need to first convert the model to an Intermediate Representation (IR) and
 # get the weight parameters and scale parameters.
-tflite_path = download_tflite(net_id="mcunet-vww1")
+#tflite_path = download_tflite(net_id="mcunet-vww1")
+tflite_path = './mcunet-5fps_vww.tflite'
 life_cycle_path = "./lifecycle.png"
 # 3. Set up patchbased parameters
 use_inplace = True
@@ -51,6 +52,7 @@ with TemporaryDirectory() as WORKING_DIR:
     # Patch-based
     if n_patches is not None:
         patch_params = getPatchParams(layer, split_index, n_patches)
+        print(patch_params)
         P_resizer = PatchResizer(layer)
         P_resizer.patchResize(patch_params["layer_cnt"], patch_params["grain_rf"], patch_params["grain_rf_height"])
 
@@ -82,8 +84,9 @@ with TemporaryDirectory() as WORKING_DIR:
     )
     # set detection outputs before codegen if any
     code_generator.codeGeneration()
-
+    print(memory_scheduler.heads)
     peakmem = memory_scheduler.buffers["input_output"]
+    flash = memory_scheduler.flash
 
-
+print(f"flash: {flash / (1024 * 1024)} MB")
 print(f"Peak memory: {peakmem} bytes")

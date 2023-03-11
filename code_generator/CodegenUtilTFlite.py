@@ -52,6 +52,8 @@ def GenerateSourceFilesFromTFlite(
         )
         memory_scheduler.USE_INPLACE = use_inplace
         memory_scheduler.allocateMemory()
+        #kucha
+        #memory_scheduler.dumpLayerMem()
 
         outTable = tf_convertor.outputTables if hasattr(tf_convertor, "outputTables") else []
         code_generator = CodeGenerator(
@@ -60,8 +62,8 @@ def GenerateSourceFilesFromTFlite(
             unsigned_input=False,
             patch_params=None,
             FP_output=False,
-            profile_mode=False,
-            fp_requantize=True,
+            profile_mode=True,
+            fp_requantize=False,
             tflite_op=False,
             dummy_address=False,
             outputTables=outTable,
@@ -69,4 +71,8 @@ def GenerateSourceFilesFromTFlite(
         # set detection outputs before codegen if any
         code_generator.codeGeneration()
 
-        return memory_scheduler.buffers["input_output"]
+        #return 
+        print('I/O peak',memory_scheduler.buffers["input_output"]//1024)
+        print('flash ',memory_scheduler.flash/(1024 * 1024), 'MB')
+        #print(memory_scheduler.heads)
+        return memory_scheduler.peakmem

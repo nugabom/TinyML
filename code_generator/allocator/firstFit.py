@@ -17,7 +17,7 @@
 # ----------------------------------------------------------------------
 
 import math
-
+from copy import deepcopy
 from .base_allocator import BaseAllocator
 
 __all__ = ["FirstFit"]
@@ -37,6 +37,7 @@ class FirstFit(BaseAllocator):
         start, end, size = rec["start"], rec["end"], rec["size"]
         slots = []
         slots.append(slot(0, self.SRAM))
+        #kucha = deepcopy(slots)
 
         for _, rec in enumerate(self.rectangles):
             if rec["placement"] != -1:  # this each placed rectangle
@@ -61,10 +62,12 @@ class FirstFit(BaseAllocator):
                             if s.y1 > y1:
                                 upper_block_botttom = y1
                                 slots.append(slot(upper_block_botttom, s.y1))
+                                #kucha.append(slot(upper_block_botttom, s.y1))
                             # lower block
                             if s.y0 < y0:
                                 lower_block_top = y0
                                 slots.append(slot(s.y0, lower_block_top))
+                                #kucha.append(slot(s.y0, lower_block_top))
                             # slots.append(slot(s.y0, y0))
                             # slots.append(slot(y1, s.y1))
                             slots.remove(s)
@@ -73,11 +76,18 @@ class FirstFit(BaseAllocator):
         # use the first available
         lowest_slot = None
         lowest_slot_starting = 2**31 - 1
+        kucha="""
+        print(f"current cell size={size}")
+        print('===========================================================')
+        for s in kucha:
+            print(f"low={s.y0}, high={s.y1}, {s.size()}")
+        """
         for s in slots:
             if s.size() >= size:  # take this slot
                 if lowest_slot_starting > s.y0:
                     lowest_slot_starting = s.y0
                     lowest_slot = s
 
+        #print('===========================================================')
         assert lowest_slot is not None, "no available slot, memory exceed MAX SRAM setting"
         return lowest_slot_starting

@@ -79,6 +79,7 @@ class BaseAllocator:
         for cnt, rec in enumerate(tqdm(self.rectangles)):
             # fit each tensor into the memmory
             rec["placement"] = self.fit(rec)
+            #print(rec)
 
     def fit(self, rec) -> int:  # memory address
         raise NotImplementedError
@@ -107,6 +108,7 @@ class BaseAllocator:
     def get_peak(self):
         peak = 0
         for rec in self.rectangles:
+            # placement + size
             rec_size = rec["placement"] + rec["size"]
             if peak < rec_size:
                 peak = rec_size

@@ -252,6 +252,7 @@ class DepthwiseConv2d(basicOperator):
                         f"pad_t /= {stride_string};pad_b /= {stride_string};pad_l /= {stride_string};"
                         + f"pad_r /= {stride_string};\n"
                     )
+                ## stride == 1 --> padding -1
                 else:
                     string += (
                         "pad_t = TN_MAX(0, pad_t-1);pad_b = TN_MAX(0, pad_b-1);pad_l = TN_MAX(0, pad_l-1);"

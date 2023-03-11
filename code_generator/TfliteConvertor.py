@@ -25,7 +25,7 @@ from code_generator.converters.tflite_parser.utils import get_input_tensors, get
 from .constant import SKIP_OPs
 from .tflite import Model
 
-
+koo=0
 # Parse tflite model into TinyEngine IR format
 class TfliteConvertor(object):
     def __init__(self, filepath):
@@ -111,6 +111,27 @@ class TfliteConvertor(object):
     # handle one op and parse it into layers[] for supported operators
     def _handleOperator(self, op):
         op_code_str = getOpCodeStr(op, self.model)
+        kucha="""
+        global koo
+
+        if op_code_str in ["CONV_2D", "DEPTHWISE_CONV_2D", "ADD"]:
+            koo += 1
+
+        inputs = get_input_tensors(op, self.model)
+        outputs = get_output_tensors(op, self.model)
+        string = f"{koo} {op_code_str}: INPUT: "
+        num_inputs = 1
+        num_outputs = 1
+        if op_code_str == "ADD":
+            num_inputs = 2
+       
+        string += "\t".join([f"{input.tensor_idx}" for input in inputs[:num_inputs]])
+        string += "\t OUTPUT: "
+        string += "\t".join([f"{output.tensor_idx}" for output in outputs[:num_outputs]])
+        print(string)
+        with open("/home/eslab/tinyengine/graph.txt", 'a') as f:
+            f.write(string+'\n')
+        """    
         if op_code_str == "CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
             self.tmpPADIndice = None

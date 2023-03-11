@@ -36,7 +36,6 @@ class InputResizer:
 
             previous_layer_info = _find_previous_info(self.layer, layer_info["input_idx"])
             # we need to handle different op
-            op_code_str = layer_info["op"]
             if i == 0:
                 layer_info["input_h"] = input_h
                 layer_info["input_w"] = input_w
@@ -112,8 +111,6 @@ class InputResizer:
                 layer_info["output_w"] = int(layer_info["input_w"] / layer_info["filter_h"])
                 layer_info["output_c"] = layer_info["input_c"]
                 _changeOPTensorSize(self.layer[i], "output", 0, layer_info["output_h"], layer_info["output_w"])
-
-
 def _changeOPTensorSize(layer, tensor_type: str, tensor_idx: int, input_h: int, input_w: int):
     if tensor_type == "input":
         if hasattr(layer, "input_tensors") and len(layer.input_tensors) > tensor_idx:
@@ -130,12 +127,16 @@ class PatchResizer:
         self.layer = layer
 
     # manually setting these variables for now
+    ## patchResize(patch_params["layer_cnt"], patch_params["grain_rf"], patch_params["grain_rf_hegiht"])
     def patchResize(self, PatchLayers, PatchSize, PatchSize_height):
         for i, layer in enumerate(self.layer):
             layer_info = layer.get_layer_info()
             if i < PatchLayers:
                 layer_info["is_patch"] = True
                 op_code_str = layer_info["op"]
+                
+                orig = layer_info['input_h']
+                kucha = f"layer ({op_code_str}) : {orig} x {orig} -> "
                 if i == 0:
                     layer_info["input_h"] = PatchSize_height
                     layer_info["input_w"] = PatchSize
@@ -163,6 +164,9 @@ class PatchResizer:
                     layer_info["input2_w"] = layer_info["input_w"]
                     _changeOPTensorSize(self.layer[i], "input", 0, layer_info["input_h"], layer_info["input_w"])
                     _changeOPTensorSize(self.layer[i], "input", 1, layer_info["input_h"], layer_info["input_w"])
+                after = layer_info['output_h']
+                kucha += f"{after} x {after} padding = {after - orig/4}"
+                print(kucha)
             else:
                 layer_info["is_patch"] = False
 
@@ -176,3 +180,4 @@ class PatchResizer:
             )
             self.layer[PatchLayers].input_tensors[0].graph_idx = self.layer[PatchLayers].params["input_idx"]
             self.layer[PatchLayers].params["is_start_of_normal_inference_block"] = True
+        

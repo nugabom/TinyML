@@ -176,7 +176,7 @@ void update_SGD(float learning_rate){\n"""
                 break  # end of patch-based
             last_patch_op = op
         assert first_normal_op, "Cannot find the first op for normal inference."
-
+        # layer_info == first_layer
         layer_info = schedule.layer[0].get_layer_info()
         if "is_patch" in layer_info and layer_info["is_patch"]:
             last_patch_op_output_buffer_str_for_patch_inference = last_patch_op._getBufferstr(

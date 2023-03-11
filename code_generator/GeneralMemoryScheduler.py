@@ -17,6 +17,7 @@
 # ----------------------------------------------------------------------
 
 from .allocator.firstFit import FirstFit
+from .allocator.base_allocator import BaseAllocator
 from .constant import (
     FUSE_SGD_UPDATE_STR,
     FUSHION_CONFIG,
@@ -58,7 +59,9 @@ class GeneralMemoryScheduler:
         self.bias = 0
         self.scale = 0
         self.code = 0
+        # kucha
         self.allocator = FirstFit(memory_limit, sort_by_lifetime)
+        #self.allocator = BaseAllocator(memory_limit, sort_by_lifetime=False)
         self.outputTables = outputTables
         self.USE_INPLACE = inplace
         self.mem_visual_path = mem_visual_path
@@ -76,14 +79,23 @@ class GeneralMemoryScheduler:
         return False
 
     def allocateMemory(self):
+
+################################ kucha ######################################################
+############### In-Place Depth-wise / conv fusion ##########################################
+#########################################################################################
+
         # assign the same graph index for inplace operations
         # note: we need to handle stride == 2 for int8 depthwise to save memory
         if self.USE_INPLACE:
             for i, op in enumerate(self.layer):
+                ## inplace dw pre-processing
+                ## post processing INPLACE 
                 if op.params["op"] == "DEPTHWISE_CONV_2D" and op.params["input_dtype"] == "int8" and not self.tflite_op:
                     # set the idx of output and next layer input
                     previous_output_idx = op.output_tensors[0].graph_idx
+                    # inplace buffer allocate
                     op.output_tensors[0].graph_idx = op.input_tensors[0].graph_idx
+                    # if exist, following input_idx <- inplace DW input
                     if (
                         i + 1 < len(self.layer)
                         and len(self.layer[i + 1].input_tensors) > 0
@@ -161,7 +173,12 @@ class GeneralMemoryScheduler:
         if self.VisaulizeTrainable:
             self.allocator.addTensor(0, length_model, trainable, type=TTYPE_STATIC_WEIGHT)
 
+#################################################### kucha ###########################################
+############################################# MCUNet V3 #############################################
+###################################################################################################
         all_t_size = 0
+        count = 0
+        tensor_count = 0
         # go through all tensors in the model
         for i, op in enumerate(self.layer):
             # get all unallocated tensors for this layer
@@ -197,6 +214,14 @@ class GeneralMemoryScheduler:
 
             # add each tensor
             training_start_idx = _find_training_idx(layers=self.layer)
+            kucha="""
+            str_ = f"{op.params['op']} ({op._op_hparam_info()}): "
+            for t in unallocated_tensors:
+                tensor_count += 1
+                str_ +=f"{t.graph_idx}\t"
+            print(f'{count + 1} WTF: {str_}')
+            count += 1
+            """
             for cnt, t in enumerate(unallocated_tensors):
                 start_idx = i
                 # TODO: this is temp solution
@@ -313,8 +338,9 @@ class GeneralMemoryScheduler:
         self.allocator.sortSize()
         self.allocator.allocate()
         self.allocator.visualize(self.mem_visual_path)
+        # get_peak() --> return max(offset + size)
         self._enlargeBuffer("input_output", self.allocator.get_peak())
-
+        print('tensor_count',tensor_count)
         # sanity check, see if all tensors have been allocated
         for i, op in enumerate(self.layer):
             # get all unallocated tensors for this layer
@@ -326,6 +352,7 @@ class GeneralMemoryScheduler:
         # assign the address according to placement
         for i, op in enumerate(self.layer):
             # get all unallocated tensors for this layer
+            # firstfit --> front
             for cnt, t in enumerate(op.input_tensors):
                 if cnt == 0:
                     op.params["input_buf_add_offset"] = self.allocator.getIdxAddress(t.allocator_idx)
@@ -351,9 +378,12 @@ class GeneralMemoryScheduler:
                     op.output_tensors[cnt].buffer_address = self.allocator.getIdxAddress(t.allocator_idx)
 
         # calculate peak mem
+        p, flash=self.profileResult()
         self.peakmem = (
             self.allocator.get_peak() + self.buffers["im2col"] + self.buffers["kernel"]  # + self.buffers["trainable"]
         )
+        #self.dumpyLayerMem(
+        print("flash:ss ", flash)
 
     def dumpLayerIndex(self):
         # header
