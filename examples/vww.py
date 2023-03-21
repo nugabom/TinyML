@@ -24,7 +24,7 @@ from mcunet.mcunet.model_zoo import download_tflite
 # get the weight parameters and scale parameters.
 #tflite_path = download_tflite(net_id="mcunet-vww1")
 #tflite_path = './mcunet-320kb-1mb_imagenet.tflite'
-tflite_path = './mcunet-256kb-1mb_imagenet.tflite'
+tflite_path = './mbv2.tflite'
 # 3. Let's generate source code for on-device deployment
 peakmem = GenerateSourceFilesFromTFlite(
     tflite_path,

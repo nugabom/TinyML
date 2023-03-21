@@ -108,6 +108,9 @@ class TfliteConvertor(object):
             # parse the op
             self._handleOperator(op)
 
+        for layer in self.layer:
+            print(layer.params['input_idx'], layer.params['output_idx'])
+
     # handle one op and parse it into layers[] for supported operators
     def _handleOperator(self, op):
         op_code_str = getOpCodeStr(op, self.model)
@@ -131,7 +134,7 @@ class TfliteConvertor(object):
         print(string)
         with open("/home/eslab/tinyengine/graph.txt", 'a') as f:
             f.write(string+'\n')
-        """    
+        """
         if op_code_str == "CONV_2D":
             self.layer.append(TF_Parser.parse_conv2d(op, self.model, self.tmpPADIndice))
             self.tmpPADIndice = None
@@ -163,7 +166,7 @@ class TfliteConvertor(object):
         elif op_code_str in SKIP_OPs:
             pass
         else:
-            raise NotImplementedError(f"Unsupported {op_code_str}")
+           raise NotImplementedError(f"Unsupported {op_code_str}")
 
     #         -> MEAN -> MEAN -> PWCONV -> PWCONV -> | ADD -> MUL ->     |
     #  DWCONV                                        |            -> MUL |
