@@ -48,7 +48,7 @@ def GenerateSourceFilesFromTFlite(
             outputTables=outTable,
             inplace=use_inplace,
             mem_visual_path=schedule_image_path,
-            VisaulizeTrainable=VisaulizeTrainable,
+            VisaulizeTrainable=VisaulizeTrainable
         )
         memory_scheduler.USE_INPLACE = use_inplace
         memory_scheduler.allocateMemory()
@@ -62,7 +62,7 @@ def GenerateSourceFilesFromTFlite(
             unsigned_input=False,
             patch_params=None,
             FP_output=False,
-            profile_mode=True,
+            profile_mode=False,
             fp_requantize=False,
             tflite_op=False,
             dummy_address=False,

@@ -223,7 +223,7 @@ void patch_depthwise_kernel5x5_stride2_inplace_kernel_CHW(
             sum = MIN(sum, activation_max);
             output[(i * output_x + output_x - 1) * channel_offset] = sum;
 
-            cols_8b_iterptr += STRIDE * 2;
+            cols_8b_iterptr += STRIDE;
         }
         cols_8b_iterptr += 2 * 2 - (column_x & 1);
         cols_8b_iterptr += (STRIDE - 1) * column_x;

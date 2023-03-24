@@ -243,6 +243,7 @@ void update_SGD(float learning_rate){\n"""
             }
             /* load partial input from the img */
             q7_t* patch_input = getInput(); // for partial input
+            q7_t* patch_input = getImg(); // for Full input
             int start_x = TN_MAX("""
                 + str(first_width - self.patch_params["pad_l"] - self.patch_params["pad_r"])
                 + """ * j - """
@@ -539,12 +540,18 @@ signed char* getInput() {
             + f"{self.MemSche.layer[0].params['input_buf_add_offset']}"
             + """];
 }
+singend char* getImg() {
+    return &buff0["""
+    + f"{self.MemSche.peakmem}"
+    + """];
+}
 signed char* getOutput() {
     return NNoutput;
 }\n"""
         )
         fp = self.source_handle
         fp.write(include_string)
+        print(f"sss : {self.MemSche.layer[0].params['input_idx']}")
 
     def _parseTrainable(self):
         schedule = self.MemSche

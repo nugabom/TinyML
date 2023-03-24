@@ -166,7 +166,7 @@ class PatchResizer:
                     _changeOPTensorSize(self.layer[i], "input", 1, layer_info["input_h"], layer_info["input_w"])
                 after = layer_info['output_h']
                 kucha += f"{after} x {after} padding = {after - orig/4}"
-                print(kucha)
+                #print(kucha)
             else:
                 layer_info["is_patch"] = False
 

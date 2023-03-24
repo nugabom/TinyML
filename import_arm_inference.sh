@@ -1,8 +1,8 @@
 #!/bin/bash
-file="mcunet-example"
+file="mbv2_r144.tflite"
 cp -r ./tutorial/inference "./tutorial/${file}"
 export PYTHONPATH=${PYTHONPATH}:$(pwd)
-python3 examples/vww.py
+python3 examples/vww_patchbased.py
 mkdir "./tutorial/${file}/Src/TinyEngine"
 mv codegen "./tutorial/${file}/Src/TinyEngine"
 cp -r ./TinyEngine/include "./tutorial/${file}/Src/TinyEngine"

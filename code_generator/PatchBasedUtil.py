@@ -29,7 +29,7 @@ def getPatchParams(layers, split_idx, n_patch):
     out_shape = max(layer_cnt["input_h"], layer_cnt["input_w"])
     feat_stride = resolution // out_shape
     grain_size = out_shape // n_patch
-    print('grain_size: ',grain_size, 'feat_stride: ',feat_stride)
+    #print('grain_size: ',grain_size, 'feat_stride: ',feat_stride)
     patch_params["single_rf"] = compute_receptive_field(layers, patch_params["layer_cnt"], 1)
     patch_params["output_c"] = layer_cnt["input_c"]
     patch_params["output_h"] = layer_cnt["output_h"]
@@ -38,7 +38,7 @@ def getPatchParams(layers, split_idx, n_patch):
     patch_params["grain_rf_height"] = compute_receptive_field(
         layers, patch_params["layer_cnt"], layer_cnt["input_h"] // n_patch
     )
-    print("receptive field: single {} all {}".format(patch_params["single_rf"], patch_params["grain_rf"]))
+    #print("receptive field: single {} all {}".format(patch_params["single_rf"], patch_params["grain_rf"]))
 
     # now generate the padding for each layer (two side)
     patch_params["pad_l"] = patch_params["single_rf"] // 2

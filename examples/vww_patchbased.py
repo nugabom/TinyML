@@ -30,12 +30,13 @@ from mcunet.mcunet.model_zoo import download_tflite
 # 2: To deploy the model on MCU, we need to first convert the model to an Intermediate Representation (IR) and
 # get the weight parameters and scale parameters.
 #tflite_path = download_tflite(net_id="mcunet-vww1")
-tflite_path = './mcunet-5fps_vww.tflite'
+tflite_path = './fb_c_r144.tflite'
 life_cycle_path = "./lifecycle.png"
 # 3. Set up patchbased parameters
 use_inplace = True
 n_patches = 2  # 2x2 patches
-split_index = 5  # split at the fifth conv later
+split_index = 13  # split at the fifth conv later
+
 # 4. Let's generate source code for on-device deployment
 
 with TemporaryDirectory() as WORKING_DIR:
@@ -87,6 +88,6 @@ with TemporaryDirectory() as WORKING_DIR:
     print(memory_scheduler.heads)
     peakmem = memory_scheduler.buffers["input_output"]
     flash = memory_scheduler.flash
-
+import math
 print(f"flash: {flash / (1024 * 1024)} MB")
-print(f"Peak memory: {peakmem} bytes")
+print(f"Peak memory: {math.ceil(peakmem//1024)} bytes")

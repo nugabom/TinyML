@@ -252,11 +252,15 @@ class Conv2d(basicOperator):
                         function_name = "patchpadding_convolve_s8_kernel3_inputch3_stride2"
                     else:
                         function_name = "convolve_s8_kernel3_inputch3_stride2_pad1"
+                
             elif kernel_h == 3 and params["stride_h"] == 1 and params["padding"] == 1:
                 function_name = "convolve_s8_kernel3_stride1_pad1"
             else:
                 raise NotImplementedError
 
+            if kernel_h == 3 and params["stride_h"] == 2:
+                if "is_patch" in params and params["is_patch"]:
+                    function_name = "patchpadding_kbuf_convolve_s8_kernel3_inputch3_stride2"
             if fp_requantize and not ("is_patch" in params and params["is_patch"] and kernel_h > 1):
                 function_name += "_fpreq"
 
@@ -286,6 +290,8 @@ class Conv2d(basicOperator):
                     f"(const q7_t*)weight{parsed_idx},"
                     + f"(const q7_t*)weight{parsed_idx}Flash,{params['first_k_channel']},bias{parsed_idx},"
                 )
+            elif params['kernel_h'] == 3 and params['stride_h'] == 2 and 'is_patch' in params and params['is_patch']:
+                string += f"(const q7_t*) weight{parsed_idx}, kbuf, bias{parsed_idx},"
             else:
                 string += f"(const q7_t*) weight{parsed_idx},bias{parsed_idx},"
 
@@ -318,7 +324,9 @@ class Conv2d(basicOperator):
 
             # intemediate buffers
             string += "sbuf"
-            if kernel_h == 3 and params["stride_h"] == 2 and params["padding"] == 1:
+            if params['kernel_h'] == 3 and params['stride_h'] == 2 and 'is_patch' in params and params['is_patch']:
+                pass
+            elif kernel_h == 3 and params["stride_h"] == 2 and params["padding"] == 1:
                 string += ",kbuf"
 
             # pad value for kernel size > 1

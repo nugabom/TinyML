@@ -108,8 +108,8 @@ class TfliteConvertor(object):
             # parse the op
             self._handleOperator(op)
 
-        for layer in self.layer:
-            print(layer.params['input_idx'], layer.params['output_idx'])
+        #for layer in self.layer:
+        #    print(layer.params['input_idx'], layer.params['output_idx'])
 
     # handle one op and parse it into layers[] for supported operators
     def _handleOperator(self, op):

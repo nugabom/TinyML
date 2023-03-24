@@ -26,6 +26,8 @@
 
 signed char* getInput();
 signed char* getOutput();
+// forPatch
+signed char* getImage();
 float* getOutput_fp();
 int32_t* getOutput_int32();
 static float lr __attribute__((unused)) = 0.0008;   // To suppress warning
@@ -36,7 +38,8 @@ void invoke(float* labels);
 void invoke_inf();
 void getResult(uint8_t* P, uint8_t* NP);
 int* getKbuffer();
-void end2endinference();
+//void end2endinference();
+void end2endinference(int8_t* img);
 void det_post_procesing(int* box_cnt, det_box** ret_box, float threshold);
 
 #endif /* INC_GENNN_H_ */

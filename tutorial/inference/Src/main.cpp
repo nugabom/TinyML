@@ -29,8 +29,8 @@ extern "C" {
 #include "tinyengine_function.h"
 }
 // #define TESTTENSOR
-#define UseCamera 1  // 1 for using Arducam; 0 for not using Arducam.
-#define NoCamera_Person 0  // 1 for person; 0 for non-person. (Only applicable when UseCamera == 0) 
+#define UseCamera 0  // 1 for using Arducam; 0 for not using Arducam.
+#define NoCamera_Person 1  // 1 for person; 0 for non-person. (Only applicable when UseCamera == 0) 
 
 #include "stm32746g_discovery.h"
 
@@ -39,8 +39,8 @@ static void Error_Handler(void);
 static void CPU_CACHE_Enable(void);
 static void MX_GPIO_Init(void);
 
-#define RES_W 80
-#define RES_H 80
+#define RES_W 144
+#define RES_H 144
 #define OUTPUT_CH 2
 
 void SystemClock_Config(void);
@@ -50,8 +50,10 @@ signed char out_int[OUTPUT_CH];
 
 float labels[] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
+int8_t *RGBbuf;
 void invoke_new_weights_givenimg(signed char *out_int8) {
-  invoke(labels);
+  end2endinference((int8_t*)&RGBbuf[0]);  
+  //invoke(labels);
   signed char *output = (signed char *)getOutput();
   for (int i = 0; i < OUTPUT_CH; i++)
     out_int8[i] = output[i];
@@ -62,7 +64,7 @@ void invoke_new_weights_givenimg(signed char *out_int8) {
 #define BUTTON2_Pin GPIO_PIN_10
 #define BUTTON2_GPIO_Port GPIOF
 
-uint16_t *RGBbuf;
+//uint16_t *RGBbuf;
 
 int main(void) {
   char buf[150];
@@ -102,8 +104,10 @@ int main(void) {
 
   uint32_t start, end;
   StartCapture();
-  signed char *input = getInput();
-  RGBbuf = (uint16_t *)&input[80 * 80 * 4];
+  //signed char *input = getInput();
+  signed char *input = getImg();
+  //RGBbuf = (uint16_t *)&input[0];
+  RGBbuf = (int8_t *)&input[0];
   int t_mode = 0;
 
   while (1) {
@@ -150,11 +154,12 @@ int main(void) {
     input[i] = no_person[i];  // Image of non-person
 #endif
   }
-  RGBbuf = (uint16_t *)&input[80 * 80 * 4];
+  RGBbuf = (int8_t *)&input;
+  //RGBbuf = (uint16_t *)&input;
   int t_mode = 0;
 
   start = HAL_GetTick();
-
+/**
   for (int i = 0; i < RES_W; i++) {
     for (int j = 0; j < RES_W; j++) {
       uint8_t red = (int32_t)input[(80 * i + j) * 3] + 128;
@@ -169,7 +174,7 @@ int main(void) {
     }
   }
   loadRGB565LCD(10, 10, RES_W, RES_W, RGBbuf, 3);
-
+**/
 	invoke_new_weights_givenimg(out_int);
 	int person = 0;
 	if (out_int[0] > out_int[1]) {
@@ -179,9 +184,10 @@ int main(void) {
 	  person = 1;
 	}
 	end = HAL_GetTick();
-	sprintf(showbuf, " Inference ");
-	displaystring(showbuf, 273, 10);
-	detectResponse(person, end - start, t_mode, 0, 0);
+	sprintf(showbuf, " Inference %d", end-start);printLog(showbuf);
+	//sprintf(showbuf, " Inference");
+	//displaystring(showbuf, 273, 10);
+	//detectResponse(person, end - start, t_mode, 0, 0);
 #endif
 }
 
