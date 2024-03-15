@@ -153,7 +153,8 @@ class Mean_2px_stride2(nn.Module):
         x_patches = torch.cat([pad_ex_top, x_patches], dim=-2)
 
         x_patches = rearrange(x_patches, "B ph pw C H W -> (B ph pw) C H W", ph=self.num_patches, pw=self.num_patches)
-        
+        out = self.mid_conv(x_patches)
+        a="""        
         Mid = self.mid_conv(x_patches[:, :, 2:, 2:])
         out_top = F.conv2d(x_patches[:, :, :3, 2:], self.top_border_weight, groups=self.groups, stride=2)
         out_left = F.conv2d(x_patches[:, :, 2:, :3], self.left_border_weight, groups=self.groups, stride=2)
@@ -162,7 +163,7 @@ class Mean_2px_stride2(nn.Module):
         Mid = torch.cat([out_left, Mid], dim=-1)
         out_ex_top = torch.cat([out_top_left, out_top], dim=-1)
         out = torch.cat([out_ex_top, Mid], dim=-2)
-
+        """
         out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.num_patches, pw=self.num_patches)
         _, _, OH, OW = out.size()
         assert LH == OH * self.mid_conv.stride[0], 'error'
