@@ -21,6 +21,7 @@ class Interpolate_S1(nn.Module):
         self.pw = n_patch
         self.pad = self.mid_conv.kernel_size[0] // 2
         self.pad_tuple = (self.pad, self.pad, self.pad, self.pad)
+        self.groups = self.mid_conv.groups
 
         self.top = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 1))
         self.bot = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 1))
@@ -36,6 +37,16 @@ class Interpolate_S1(nn.Module):
 
         self.left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
         self.right_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+        
+        self.top_w = nn.Parameter(self.mid_conv.weight)
+        self.bot_w = nn.Parameter(self.mid_conv.weight)
+        self.left_w = nn.Parameter(self.mid_conv.weight)
+        self.right_w = nn.Parameter(self.mid_conv.weight)
+
+        self.top_left_w = nn.Parameter(self.mid_conv.weight)
+        self.top_right_w = nn.Parameter(self.mid_conv.weight)
+        self.bot_left_w = nn.Parameter(self.mid_conv.weight)
+        self.bot_right_w = nn.Parameter(self.mid_conv.weight)
 
     def alpha_update(self, patches, x):
         B, C, H, W = x.size()
@@ -123,8 +134,30 @@ class Interpolate_S1(nn.Module):
         
         padded_patch = torch.cat([pad_ex_top, pad_mid, pad_ex_bot], dim=-2)
         padded_patch = rearrange(padded_patch, "B C ph pw H W -> (B ph pw) C H W", ph=self.ph, pw=self.pw)
+
+        mid = self.mid_conv(padded_patch[:, :, 1:-1, 1:-1])
+
+        out_top = F.conv2d(padded_patch[:, :, :3, 1:-1], self.top_w, groups=self.groups)
+        out_bot = F.conv2d(padded_patch[:, :, -3:, 1:-1], self.bot_w, groups=self.groups)
+        out_left = F.conv2d(padded_patch[:, :, 1:-1, :3], self.left_w, groups=self.groups)
+        out_right = F.conv2d(padded_patch[:, :, 1:-1, -3:], self.right_w, groups=self.groups)
+
+        out_top_left = F.conv2d(padded_patch[:, :, :3, :3], self.top_left_w, groups=self.groups)
+        out_top_right = F.conv2d(padded_patch[:, :, :3, -3:], self.top_right_w, groups=self.groups)
+        out_bot_left = F.conv2d(padded_patch[:, :, -3:, :3], self.bot_left_w, groups=self.groups)
+        out_bot_right = F.conv2d(padded_patch[:, :, -3:, -3:], self.bot_right_w, groups=self.groups)
+
+        out_ex_top = torch.cat([out_top_left, out_top, out_top_right], dim=-1)
+        out_ex_bot = torch.cat([out_bot_left, out_bot, out_bot_right], dim=-1)
+        mid = torch.cat([out_left, mid, out_right], dim=-1)
+
+        out = torch.cat([out_ex_top, mid, out_ex_bot], dim=-2)
+        out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.ph, pw=self.pw)
+
+        a="""
         out = self.mid_conv(padded_patch)
         out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.ph, pw=self.pw)
+        """
         return out
 
     def forward(self, x):
@@ -147,11 +180,16 @@ class Interpolate_S2(nn.Module):
         self.pad_tuple = (self.pad, self.pad - 1, self.pad, self.pad - 1)
         self.top = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 1))
         self.left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+        self.groups = self.mid_conv.groups
 
         self.fitting = True
         self.lr = 1.0
         self.top_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 1))
         self.left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+
+        self.top_w = nn.Parameter(self.mid_conv.weight)
+        self.left_w = nn.Parameter(self.mid_conv.weight)
+        self.top_left_w = nn.Parameter(self.mid_conv.weight)
 
     def alpha_update(self, patches, x):
         B, C, H, W = x.size()
@@ -201,7 +239,20 @@ class Interpolate_S2(nn.Module):
         
         padded_patch = torch.cat([pad_ex_top, pad_mid], dim=-2)
         padded_patch = rearrange(padded_patch, "B C ph pw H W -> (B ph pw) C H W", ph=self.ph, pw=self.pw)
-        out = self.mid_conv(padded_patch)
+        #out = self.mid_conv(padded_patch)
+        #out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.ph, pw=self.pw)
+
+        mid = self.mid_conv(padded_patch[:, :, 2:, 2:])
+
+        out_top = F.conv2d(padded_patch[:, :, :3, 2:], self.top_w, groups=self.groups, stride=2)
+        out_left = F.conv2d(padded_patch[:, :, 2:, :3], self.left_w, groups=self.groups, stride=2)
+
+        out_top_left = F.conv2d(padded_patch[:, :, :3, :3], self.top_left_w, groups=self.groups, stride=2)
+
+        out_ex_top = torch.cat([out_top_left, out_top], dim=-1)
+        mid = torch.cat([out_left, mid], dim=-1)
+
+        out = torch.cat([out_ex_top, mid], dim=-2)
         out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.ph, pw=self.pw)
         return out
 

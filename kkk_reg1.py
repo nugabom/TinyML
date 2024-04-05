@@ -12,6 +12,12 @@ def get_patch(feature, pad_tuple, ph, pw):
     out = padded_x.unfold(2, patch_h + l + r, patch_h).unfold(3, patch_w + l + r, patch_w)
     return out
 
+def relu_grad(tensor, min=0, max=6):
+    grad = torch.ones_like(tensor) 
+    grad[tensor < min] = 0.0
+    grad[tensor > max] = 0.0
+    return grad
+    
 class Interpolate_S1(nn.Module):
     def __init__(self, ConvModule, padding, n_patch):
         super(Interpolate_S1, self).__init__()
@@ -66,15 +72,16 @@ class Interpolate_S1(nn.Module):
         pred_right[:, :, :, -1, :, -1] *= 0.0
         #diff_right = patch2[:, :, :, :, :, -1] - patch2[:, :, :, :, :, -2]
 
-        mse_loss_top = 2 * (pred_top - target_top) * patch2[:, :, :, :, :2, :]
+        
+        mse_loss_top = 2 * (pred_top - target_top) * patch2[:, :, :, :, :2, :] 
         mse_loss_bot = 2 * (pred_bot - target_bot) * patch2[:, :, :, :, -2:, :]
-        mse_loss_left = 2 * (pred_left - target_left) * patch2[:, :, :, :, :, :2]
-        mse_loss_right = 2 * (pred_right - target_right) * patch2[:, :, :, :, :, -2:]
+        mse_loss_left = 2 * (pred_left - target_left) * patch2[:, :, :, :, :, :2] 
+        mse_loss_right = 2 * (pred_right - target_right) * patch2[:, :, :, :, :, -2:] 
 
-        mse_loss_top = mse_loss_top.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
-        mse_loss_bot = mse_loss_bot.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
-        mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B)
-        mse_loss_right = mse_loss_right.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B)
+        mse_loss_top = mse_loss_top.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B) 
+        mse_loss_bot = mse_loss_bot.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B) 
+        mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B) 
+        mse_loss_right = mse_loss_right.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B) 
 
         #total_loss = (mse_loss_top + mse_loss_bot + mse_loss_left + mse_loss_right) / (4 * (self.ph - 1) * H * B)
         self.top_m = nn.Parameter(0.90 * self.top_m - self.lr * mse_loss_top.reshape(self.top.size()))
@@ -99,6 +106,11 @@ class Interpolate_S1(nn.Module):
         pad_topright = patch[:, :, :, :, 0, -1].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
         pad_botleft = patch[:, :, :, :, -1, 0].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
         pad_botright = patch[:, :, :, :, -1, -1].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
+
+        pad_top = F.relu6(pad_top)
+        pad_bot = F.relu6(pad_bot)
+        pad_left = F.relu6(pad_left)
+        pad_right = F.relu6(pad_right)
 
         pad_top[:, :, 0, :, 0, :] *= 0.0
         pad_bot[:, :, -1, :, -1, :] *= 0.0
@@ -139,6 +151,87 @@ class Interpolate_S1(nn.Module):
 class Interpolate_S2(nn.Module):
     def __init__(self, ConvModule, padding, n_patch):
         super(Interpolate_S2, self).__init__()
+        self.mid_conv = ConvModule
+        self.mid_conv.padding = (0,0)
+        self.ph = n_patch
+        self.pw = n_patch
+        self.pad = self.mid_conv.kernel_size[0] // 2
+        self.pad_tuple = (self.pad, self.pad - 1, self.pad, self.pad - 1)
+        self.top = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 1))
+        self.left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+
+        self.fitting = True
+        self.lr = 1.0
+        self.top_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 1))
+        self.left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+
+    def alpha_update(self, patches, x):
+        B, C, H, W = x.size()
+        patch2 = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph, pw=self.pw)
+
+        target_top = patches[:, :, :, :, :1, 1:]
+        target_left = patches[:, :, :, :, 1:, :1]
+        
+        
+        #pred_top = patch2[:, :, :, :, 1, :] + self.top * (patch2[:, :, :, :, 0, :] - patch2[:, :, :, :, 1, :])
+        pred_top = (self.top * patch2[:, :, :, :, :2, :]).sum(dim=-2, keepdim=True)
+        pred_top[:, :, 0, :, 0, :] *= 0.0
+
+        #pred_left = patch2[:, :, :, :, :, 1] + self.left * (patch2[:, :, :, :, :, 0] - patch2[:, :, :, :, :, 1])
+        pred_left = (self.left * patch2[:, :, :, :, :, :2]).sum(dim=-1, keepdim=True)
+        pred_left[:, :, :, 0, :, 0] *= 0.0
+
+        mse_loss_top = 2 * (pred_top - target_top) * patch2[:, :, :, :, :2, :] 
+        mse_loss_left = 2 * (pred_left - target_left) * patch2[:, :, :, :, :, :2] 
+
+        mse_loss_top = mse_loss_top.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
+        mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B) 
+
+        #total_loss = (mse_loss_top + mse_loss_left) / (2 * (self.ph - 1) * H * B)
+        self.top_m = nn.Parameter(0.90 * self.top_m - self.lr * mse_loss_top.reshape(self.top.size()))
+        self.left_m = nn.Parameter(0.90 * self.left_m - self.lr * mse_loss_left.reshape(self.left.size()))
+
+        self.top = nn.Parameter(self.top_m + self.top)
+        self.left = nn.Parameter(self.left_m + self.left)
+
+    def predict(self, x):
+        patch = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph, pw=self.pw)
+        
+        pad_top = (self.top * patch[:, :, :, :, :2, :]).sum(dim=-2, keepdim=True)
+        pad_left = (self.left * patch[:, :, :, :, :, :2]).sum(dim=-1, keepdim=True)
+
+        pad_topleft = patch[:, :, :, :, 0, 0].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
+
+        pad_top = F.relu6(pad_top)
+        pad_left = F.relu6(pad_left)
+
+        pad_top[:, :, 0, :, 0, :] *= 0.0
+        pad_left[:, :, :, 0, :, 0] *= 0.0
+
+        pad_topleft[:, :, 0, :, :, :] *= 0.0
+        pad_topleft[:, :, :, 0, :, :] *= 0.0
+
+        pad_ex_top = torch.cat([pad_topleft, pad_top], dim=-1)
+        pad_mid = torch.cat([pad_left, patch], dim=-1)
+        
+        padded_patch = torch.cat([pad_ex_top, pad_mid], dim=-2)
+        padded_patch = rearrange(padded_patch, "B C ph pw H W -> (B ph pw) C H W", ph=self.ph, pw=self.pw)
+        out = self.mid_conv(padded_patch)
+        out = rearrange(out, "(B ph pw) C H W -> B C (ph H) (pw W)", ph=self.ph, pw=self.pw)
+        return out
+
+    def forward(self, x):
+        if self.fitting:
+            patches = get_patch(x, self.pad_tuple, self.ph, self.pw)
+            self.alpha_update(patches, x)
+            x = F.pad(x, self.pad_tuple, mode='constant', value=0.0)
+            return self.mid_conv(x)
+        else:
+            return self.predict(x)
+
+class Interpolate_S2_1(nn.Module):
+    def __init__(self, ConvModule, padding, n_patch):
+        super(Interpolate_S2_1, self).__init__()
         self.mid_conv = ConvModule
         self.mid_conv.padding = (0,0)
         self.ph = n_patch
@@ -214,6 +307,7 @@ class Interpolate_S2(nn.Module):
         else:
             return self.predict(x)
 
+
 def get_attr(layer):
     k = layer.kernel_size[0]
     s = layer.stride[0]
@@ -230,9 +324,13 @@ def change_model_list(model, num_patches, Module_To_Mapping, patch_list):
             for attr in attrs[:-1]:
                 submodule = getattr(submodule, attr)
             (k, s) = get_attr(target)
-            if patch_list[i] == 0:
+            if patch_list[i] == 0 and i != 0:
                 replace = Module_To_Mapping[(k, s, patch_list[i])](target, target.padding, num_patches)
                 setattr(submodule, attrs[-1], replace)
+            elif patch_list[i] == 0 and i == 0:
+                replace = Interpolate_S2_1(target, target.padding, num_patches)
+                setattr(submodule, attrs[-1], replace)
+				
             i += 1
 
 def tuning_mode(model):
@@ -244,12 +342,6 @@ def predict_mode(model):
     for n, mod in model.named_modules():
         if hasattr(mod, 'fitting'):
             mod.fitting = False
-            mod.top_m = nn.Parameter(torch.zeros_like(mod.top_m).to(mod.top_m))
-            mod.left_m = nn.Parameter(torch.zeros_like(mod.left_m).to(mod.left_m))
-            if hasattr(mod, 'bot_m'):
-                mod.bot_m = nn.Parameter(torch.zeros_like(mod.bot_m).to(mod.bot_m))
-                mod.right_m = nn.Parameter(torch.zeros_like(mod.right_m).to(mod.right_m))
-
 
 def show_status(model):
     for n, mod in model.named_modules():

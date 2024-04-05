@@ -28,6 +28,11 @@ class Interpolate_S1(nn.Module):
         self.left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 1, 2))
         self.right = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 1, 2))
 
+        self.top_left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.top_right = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.bot_left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.bot_right = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+
         self.fitting = True
         self.lr = 1.0
 
@@ -36,6 +41,11 @@ class Interpolate_S1(nn.Module):
 
         self.left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
         self.right_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
+
+        self.top_left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.top_right_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.bot_left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.bot_right_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 2))
 
     def alpha_update(self, patches, x):
         B, C, H, W = x.size()
@@ -46,25 +56,46 @@ class Interpolate_S1(nn.Module):
         target_left = patches[:, :, :, :, 1:-1, :1]
         target_right = patches[:, :, :, :, 1:-1, -1:]
 
+        target_top_left = patches[:, :, :, :, :1, :1]
+        target_top_right = patches[:, :, :, :, :1, -1:]
+        target_bot_left = patches[:, :, :, :, -1:, :1]
+        target_bot_right = patches[:, :, :, :, -1:, -1:]
+
+
+        pred_top_left = (self.top_left * patch2[:, :, :, :, :2, :2]).sum(dim=[-1, -2], keepdim=True)
+        pred_top_right = (self.top_right * patch2[:, :, :, :, :2, -2:]).sum(dim=[-1, -2], keepdim=True)
+        pred_bot_left = (self.bot_left * patch2[:, :, :, :, -2:, :2]).sum(dim=[-1, -2], keepdim=True)
+        pred_bot_right = (self.bot_right * patch2[:, :, :, :, -2:, -2:]).sum(dim=[-1, -2], keepdim=True)
+
+        pred_top_left[:, :, 0, :, :, :] *= 0.0
+        pred_top_left[:, :, :, 0, :, :] *= 0.0
+
+        pred_top_right[:, :, 0, :, :, :] *= 0.0
+        pred_top_right[:, :, :, -1, :, :] *= 0.0
+
+        pred_bot_left[:, :, -1, :, :, :] *= 0.0
+        pred_bot_left[:, :, :, 0, :, :] *= 0.0
+
+        pred_bot_right[:, :, -1, :, :, :] *= 0.0
+        pred_bot_right[:, :, :, -1, :, :] *= 0.0
+
         pred_top = (self.top * patch2[:, :, :, :, :2, :]).sum(dim=-2, keepdim=True)
-        # B, C, ph, pw, H, W
         pred_top[:, :, 0, :, 0, :] *= 0.0
 
-        #pred_bot = self.bot[0] * patch2[:, :, :, :, -1, :] + self.bot[1] * patch2[:, :, :, :, -2, :]
         pred_bot = (self.bot * patch2[:, :, :, :, -2:, :]).sum(dim=-2, keepdim=True)
         pred_bot[:, :, -1, :, -1, :] *= 0.0
 
-        #pred_left = patch2[:, :, :, :, :, 1] + self.left * (patch2[:, :, :, :, :, 0] - patch2[:, :, :, :, :, 1])
-        #pred_left = self.left[0] * patch2[:, :, :, :, :, 0] + self.left[1] * patch2[:, :, :, :, :, 1]
         pred_left = (self.left * patch2[:, :, :, :, :, :2]).sum(dim=-1, keepdim=True)
         pred_left[:, :, :, 0, :, 0] *= 0.0
-        #diff_left = patch2[:, :, :, :, :, 0] - patch2[:, :, :, :, :, 1]
 
-        #pred_right = patch2[:, :, :, :, :, -2] + self.right * (patch2[:, :, :, :, :, -1] - patch2[:, :, :, :, :, -2])
-        #pred_right = self.right[0] * patch2[:, :, :, :, :, -1] + self.right[1] * patch2[:, :, :, :, :, -2]
         pred_right = (self.right * patch2[:, :, :, :, :, -2:]).sum(dim=-1, keepdim=True)
         pred_right[:, :, :, -1, :, -1] *= 0.0
-        #diff_right = patch2[:, :, :, :, :, -1] - patch2[:, :, :, :, :, -2]
+
+
+        mse_loss_top_left = 2 * (pred_top_left - target_top_left) * patch2[:, :, :, :, :2, :2]
+        mse_loss_top_right = 2 * (pred_top_right - target_top_right) * patch2[:, :, :, :, :2, -2:]
+        mse_loss_bot_left = 2 * (pred_bot_left - target_bot_left) * patch2[:, :, :, :, -2:, :2]
+        mse_loss_bot_right = 2 * (pred_bot_right - target_bot_right) * patch2[:, :, :, :, -2:, -2:]
 
         mse_loss_top = 2 * (pred_top - target_top) * patch2[:, :, :, :, :2, :]
         mse_loss_bot = 2 * (pred_bot - target_bot) * patch2[:, :, :, :, -2:, :]
@@ -72,20 +103,35 @@ class Interpolate_S1(nn.Module):
         mse_loss_right = 2 * (pred_right - target_right) * patch2[:, :, :, :, :, -2:]
 
         mse_loss_top = mse_loss_top.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
-        mse_loss_bot = mse_loss_bot.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
+        mse_loss_bot = mse_loss_bot.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B) 
         mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B)
-        mse_loss_right = mse_loss_right.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B)
+        mse_loss_right = mse_loss_right.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B) 
 
+        mse_loss_top_left = mse_loss_top_left.sum(axis=[0, 2, 3]) / ((self.ph - 1) **2 * B) 
+        mse_loss_top_right = mse_loss_top_right.sum(axis=[0, 2, 3]) / ((self.ph - 1) ** 2 * B)
+        mse_loss_bot_left = mse_loss_bot_left.sum(axis=[0, 2, 3]) / ((self.ph - 1) ** 2 * B)
+        mse_loss_bot_right = mse_loss_bot_right.sum(axis=[0, 2, 3]) / ((self.ph - 1) ** 2 * B) 
+        
         #total_loss = (mse_loss_top + mse_loss_bot + mse_loss_left + mse_loss_right) / (4 * (self.ph - 1) * H * B)
         self.top_m = nn.Parameter(0.90 * self.top_m - self.lr * mse_loss_top.reshape(self.top.size()))
         self.bot_m = nn.Parameter(0.90 * self.bot_m - self.lr * mse_loss_bot.reshape(self.bot.size()))
         self.left_m = nn.Parameter(0.90 * self.left_m - self.lr * mse_loss_left.reshape(self.left.size()))
         self.right_m = nn.Parameter(0.90 * self.right_m - self.lr * mse_loss_right.reshape(self.right.size()))
 
+        self.top_left_m = nn.Parameter(0.90 * self.top_left_m - self.lr * mse_loss_top_left.reshape(self.top_left.size()))
+        self.top_right_m = nn.Parameter(0.90 * self.top_right_m - self.lr * mse_loss_top_right.reshape(self.top_right.size()))
+        self.bot_left_m = nn.Parameter(0.90 * self.bot_left_m - self.lr * mse_loss_bot_left.reshape(self.bot_left.size()))
+        self.bot_right_m = nn.Parameter(0.90 * self.bot_right_m - self.lr * mse_loss_bot_right.reshape(self.bot_right.size()))
+
         self.top = nn.Parameter(self.top_m + self.top)
         self.bot = nn.Parameter(self.bot_m + self.bot)
         self.left = nn.Parameter(self.left_m + self.left)
         self.right = nn.Parameter(self.right_m + self.right)
+        
+        self.top_left = nn.Parameter(self.top_left_m + self.top_left)
+        self.top_right = nn.Parameter(self.top_right_m + self.top_right)
+        self.bot_left = nn.Parameter(self.bot_left_m + self.bot_left)
+        self.bot_right = nn.Parameter(self.bot_right_m + self.bot_right)
 
     def predict(self, x):
         patch = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph, pw=self.pw)
@@ -95,10 +141,15 @@ class Interpolate_S1(nn.Module):
         pad_left = (self.left * patch[:, :, :, :, :, :2]).sum(dim=-1, keepdim=True)
         pad_right = (self.right * patch[:, :, :, :, :, -2:]).sum(dim=-1, keepdim=True)
 
-        pad_topleft = patch[:, :, :, :, 0, 0].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
-        pad_topright = patch[:, :, :, :, 0, -1].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
-        pad_botleft = patch[:, :, :, :, -1, 0].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
-        pad_botright = patch[:, :, :, :, -1, -1].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
+        pad_topleft = (patch[:, :, :, :, :2, :2] * self.top_left).sum(dim=[-1, -2], keepdim=True)
+        #pad_topleft = pad_topleft.unsqueeze(dim=-1).unsqueeze(dim=-1)
+
+        pad_topright = (patch[:, :, :, :, :2, -2:] * self.top_right).sum(dim=[-1, -2], keepdim=True)
+        #pad_topright = pad_topright.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        pad_botleft = (patch[:, :, :, :, -2:, :2] * self.bot_left).sum(dim=[-1, -2], keepdim=True)
+        #pad_botleft = pad_botleft.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        pad_botright = (patch[:, :, :, :, -2:, -2:] * self.bot_right).sum(dim=[-1, -2], keepdim=True)
+        #pad_botright = pad_botright.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
         pad_top[:, :, 0, :, 0, :] *= 0.0
         pad_bot[:, :, -1, :, -1, :] *= 0.0
@@ -153,14 +204,22 @@ class Interpolate_S2(nn.Module):
         self.top_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 1))
         self.left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 1, 2))
 
+        self.top_left = nn.Parameter(torch.randn(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+        self.top_left_m = nn.Parameter(torch.zeros(1, self.mid_conv.in_channels, 1, 1, 2, 2))
+
     def alpha_update(self, patches, x):
         B, C, H, W = x.size()
         patch2 = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph, pw=self.pw)
 
         target_top = patches[:, :, :, :, :1, 1:]
         target_left = patches[:, :, :, :, 1:, :1]
+        target_top_left = patches[:, :, :, :, :1, :1]
         
         
+        pred_top_left = (self.top_left * patch2[:, :, :, :, :2, :2]).sum(dim=[-1, -2], keepdim=True)
+        pred_top_left[:, :, 0, :, :, :] *= 0.0
+        pred_top_left[:, :, :, 0, :, :] *= 0.0
+
         #pred_top = patch2[:, :, :, :, 1, :] + self.top * (patch2[:, :, :, :, 0, :] - patch2[:, :, :, :, 1, :])
         pred_top = (self.top * patch2[:, :, :, :, :2, :]).sum(dim=-2, keepdim=True)
         pred_top[:, :, 0, :, 0, :] *= 0.0
@@ -171,16 +230,23 @@ class Interpolate_S2(nn.Module):
 
         mse_loss_top = 2 * (pred_top - target_top) * patch2[:, :, :, :, :2, :]
         mse_loss_left = 2 * (pred_left - target_left) * patch2[:, :, :, :, :, :2]
+        mse_loss_top_left = 2 * (pred_top_left - target_top_left) * patch2[:, :, :, :, :2, :2]
 
         mse_loss_top = mse_loss_top.sum(axis=[0, 2, 3, 5]) / ((self.ph - 1) * H * B)
-        mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B)
+        mse_loss_left = mse_loss_left.sum(axis=[0, 2, 3, 4]) / ((self.ph - 1) * H * B) 
+
+        mse_loss_top_left = mse_loss_top_left.sum(axis=[0, 2, 3]) / ((self.ph - 1) ** 2 * B) 
 
         #total_loss = (mse_loss_top + mse_loss_left) / (2 * (self.ph - 1) * H * B)
         self.top_m = nn.Parameter(0.90 * self.top_m - self.lr * mse_loss_top.reshape(self.top.size()))
         self.left_m = nn.Parameter(0.90 * self.left_m - self.lr * mse_loss_left.reshape(self.left.size()))
 
+        self.top_left_m = nn.Parameter(0.90 * self.top_left_m - self.lr * mse_loss_top_left.reshape(self.top_left.size()))
+
         self.top = nn.Parameter(self.top_m + self.top)
         self.left = nn.Parameter(self.left_m + self.left)
+
+        self.top_left = nn.Parameter(self.top_left_m + self.top_left)
 
     def predict(self, x):
         patch = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph, pw=self.pw)
@@ -188,7 +254,8 @@ class Interpolate_S2(nn.Module):
         pad_top = (self.top * patch[:, :, :, :, :2, :]).sum(dim=-2, keepdim=True)
         pad_left = (self.left * patch[:, :, :, :, :, :2]).sum(dim=-1, keepdim=True)
 
-        pad_topleft = patch[:, :, :, :, 0, 0].clone().unsqueeze(dim=-1).unsqueeze(dim=-1)
+        pad_topleft = (self.top_left * patch[:, :, :, :, :2, :2]).sum(dim=[-1, -2], keepdim=True)
+        #pad_topleft = pad_topleft.unsqueeze(dim=-1).unsqueeze(dim=-1)
 
         pad_top[:, :, 0, :, 0, :] *= 0.0
         pad_left[:, :, :, 0, :, 0] *= 0.0
@@ -244,12 +311,6 @@ def predict_mode(model):
     for n, mod in model.named_modules():
         if hasattr(mod, 'fitting'):
             mod.fitting = False
-            mod.top_m = nn.Parameter(torch.zeros_like(mod.top_m).to(mod.top_m))
-            mod.left_m = nn.Parameter(torch.zeros_like(mod.left_m).to(mod.left_m))
-            if hasattr(mod, 'bot_m'):
-                mod.bot_m = nn.Parameter(torch.zeros_like(mod.bot_m).to(mod.bot_m))
-                mod.right_m = nn.Parameter(torch.zeros_like(mod.right_m).to(mod.right_m))
-
 
 def show_status(model):
     for n, mod in model.named_modules():
@@ -286,8 +347,8 @@ def alternative_tuning(model, progressive):
             else:
                 mod.fitting = False
             i += 1
-a="""
 # MAIN
+a="""
 from torchvision.models import mobilenet_v2
 model = mobilenet_v2(pretrained=True)
 change_model_list(model, 4, module_to_mapping, [0, 0, 0, 0, 0])
