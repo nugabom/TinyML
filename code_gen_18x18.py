@@ -686,7 +686,7 @@ def get_computation(self, input, output):
     op.set_op_type(str(t))
     #print(t)
     assert t != None, "error"
-    if t == "Store":
+    if t in "Store" in t:
         gid = check_in_tensors(buffer(input[0], -1))
         if gid is None:
             gid = len(tensors)
@@ -694,7 +694,7 @@ def get_computation(self, input, output):
         op.set_input_tensors(buffer(input[0], gid, str(type(self))))
         ops.append(op)
         return
-    if t == "Delete":
+    if t in "Delete":
         gid = check_in_tensors(buffer(input[0], -1))
         if gid is None:
             gid = len(tensors)
