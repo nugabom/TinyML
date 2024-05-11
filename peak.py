@@ -1,17 +1,23 @@
 import torch
 import numpy as np
 import torch.nn as nn
+from bn_fusion import *
 from torchvision.models import mobilenet_v2 as Net
 from torchvision.models.mobilenetv2 import Add
 import pandas as pd
 import matplotlib.pyplot as plt
 from copy import deepcopy
-set_N = 4
+set_N = 28
 USE_BUFFER = True
 
 pd.options.display.max_rows = None
 pd.options.display.max_columns = None
-model = Net(width_mult=0.5)
+model = Net(width_mult=1.0, pretrained=True)
+model1 = Net(width_mult=1.0, pretrained=True)
+model1.eval()
+# Batch Norm constant folding
+#model = fuse_bn_recursively(model)
+model.eval()
 features = []
 stages = []
 ops = []
@@ -50,6 +56,7 @@ def Stage_DW(op):
         ret.input_shapes[0] = (0, 0, 0, 0)
         ret.output_shapes[0] = (0, 0, 0, 0)
     return ret
+
 def get_search(stages):
     ret_ops = []
     
@@ -66,6 +73,7 @@ class Stage:
 #if hasattr(op, 'groups') and op.groups == 1 else (0, 0, 0, 0)]
         self.residuals = [op.residual]
         self.n_patch = 1
+        self.mode = False
         self.pt = [False]
         self.bt = [False]
         self.spatials = [op.spatial]
@@ -253,7 +261,7 @@ for n, mod in model.named_modules():
         mod.name = conv_module_name_filter(mod.__repr__())
         mod.register_forward_hook(lambda m, input, output: module_profiling(m, input, output))
 
-model(torch.randn(1, 3, 160, 160))
+model(torch.randn(1, 3, 224, 224))
 
     
 layer_id = 0
@@ -265,10 +273,11 @@ for block in model.features:
                 setattr(l, 'residual', None)
                 setattr(l, 'spatial', spatial)
                 setattr(l, 'layer_id', layer_id)
+                setattr(l, 'relu', True)
                 layer_id += 1
                 ops.append(l)
     if "InvertedResidual" in str(type(block)):
-        add = False
+        add = None
         spatial = False
         for l in block.conv.modules():
             if isinstance(l, Add):
@@ -286,6 +295,10 @@ for block in model.features:
                 setattr(l, 'residual', add)
                 setattr(l, 'spatial', spatial)
                 setattr(l, 'layer_id', layer_id)
+                if l.in_channels < l.out_channels:
+                    setattr(l, 'relu', False)
+                else:
+                    setattr(l, 'relu', True)
                 layer_id += 1
                 ops.append(l)
 
@@ -460,7 +473,6 @@ def try_fusion(stages, input_buf_idx, output_buf_idx, N=set_N):
     try_stages = deepcopy(stages[input_buf_idx:output_buf_idx + 1])
     #print(try_stages)
     _, _, _, H = try_stages[-1].ops[0].output_shape
-    a=""" 
     if H % N != 0:
         N = 14 
     if H % N != 0:
@@ -471,7 +483,7 @@ def try_fusion(stages, input_buf_idx, output_buf_idx, N=set_N):
         N = 2
     if H % N != 0:
         N = 1
-    """
+    a="""
     if H % N != 0:
         N = 10
     if H % N != 0:
@@ -482,6 +494,7 @@ def try_fusion(stages, input_buf_idx, output_buf_idx, N=set_N):
         N = 2
     if H % N != 0:
         N = 1
+    """
     if N == 1:
         print("N == 1 case")
         return try_stages, 0
@@ -545,7 +558,7 @@ def try_fusion(stages, input_buf_idx, output_buf_idx, N=set_N):
             fused_stage.pt[0] = True
             fused_stage.bt[0] = use_buffering
             fused_stage.buffer_overlap[0] = buffer_overlap
-  
+         
     # last spatial layer don't use buffer
     if USE_BUFFER:
         #fused_stage.buffer_mem = get_buffer_memory_in_fusion(fused_stage)
@@ -788,7 +801,6 @@ def get_step_iterate(total_stages, peak_idx, peak_mem, look=False):
         return current_total_stages
 
     return try_total_stages
-#MAIN
 
 def goo(stages, idx, peak_mem):
     if isinstance(idx, int):
@@ -810,81 +822,81 @@ def goo(stages, idx, peak_mem):
 #stages = try_fusion(stages, 0, 20)
 #print(stages[0].buffer_mem)
 #exit()
-show_layer_mem(stages)
+#show_layer_mem(stages)
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion1 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion2 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion3 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion4 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion5 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion6 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion7 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion8 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion9 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion10 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion11 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion11 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
 idx, peak_mem = get_stage_with_peak_s(stages)
 print(f'fusion11 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
+#show_layer_mem(stages)
+print(f'fusion11 : {idx}, {peak_mem}')
+stages = goo(stages, idx, peak_mem)
+#show_layer_mem(stages)
+print(f'fusion11 : {idx}, {peak_mem}')
+stages = goo(stages, idx, peak_mem)
+#show_layer_mem(stages)
+print(f'fusion11 : {idx}, {peak_mem}')
+stages = goo(stages, idx, peak_mem)
+#show_layer_mem(stages)
 print(f'fusion11 : {idx}, {peak_mem}')
 stages = goo(stages, idx, peak_mem)
 show_layer_mem(stages)
-print(f'fusion11 : {idx}, {peak_mem}')
-stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
-print(f'fusion11 : {idx}, {peak_mem}')
-stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
-print(f'fusion11 : {idx}, {peak_mem}')
-stages = goo(stages, idx, peak_mem)
-show_layer_mem(stages)
-
+#plt.show()
 i = 0
 group = 0
 # kkk
@@ -899,14 +911,27 @@ for s in stages:
             print('residual\t\t',res)
             i += 1
         group += 1
-show_layer_mem(stages)
-plt.show()
-#print(idx, peak_mem)
-#left, right = get_window(stages, idx, 0, 0)
-#stages_window = get_search(stages[left:right+1])
-#get_step_
-#print(stages_window)
-#temp = compute_overlap(stages_window)
-#peak_idx_window, _ = get_stage_with_peak(temp)
-#input_buf, output_buf = find_buffer_windows(temp, peak_idx_window)
-#print(input_buf, output_buf)
+exit()
+#MAIN
+x = torch.randn(1, 3, 224, 224)
+x1 = x.clone()
+y = None
+buffering_tensor_for_add = False
+for s in stages:
+    for i, op in enumerate(s.ops):
+        if not buffering_tensor_for_add and op.residual:
+            y = x.clone()
+            buffering_tensor_for_add = True
+        if isinstance(op, nn.Conv2d):
+            x = op(x)
+            if getattr(op, 'relu', False):
+                x = torch.nn.functional.relu6(x)
+        else:
+            x = op(x, y)
+            buffering_tensor_for_add = False
+            y = None
+
+x1 = model1.features(x1)
+print(torch.allclose(x, x1))
+
+
