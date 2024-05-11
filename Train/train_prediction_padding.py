@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 """ ImageNet Training Script
 
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
@@ -33,10 +33,12 @@ from timm import utils
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
 from timm.loss import JsdCrossEntropy, SoftTargetCrossEntropy, BinaryCrossEntropy, LabelSmoothingCrossEntropy
-from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters, custom_padding
+from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
+
+from models.mobilenetv2 import *
 #from best_sampling_Mean2px import *
 #from pproMean2px_1 import *
 #from proLearn import *
@@ -49,7 +51,7 @@ def get_size(x, l, r, ph, pw):
     patch_w = w // pw
     padded_x = F.pad(x, (l, r, l, r), mode='constant', value=0.0)
     return padded_x.unfold(2, patch_h + l + r, patch_h).unfold(3, patch_w + l + r, patch_w).detach()
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -554,11 +556,15 @@ def main():
     model.load_state_dict(pre_weight, strict=True)
     pretrain.load_state_dict(pre_weight, strict=True)
 
+    # Fix batchnorm running stats
     for n, mod in model.named_modules():
         if isinstance(mod, nn.BatchNorm2d):
             mod.track_running_stats = False
+
+    # Convert model according to the non-overlapping configurations
     change_model_list(model, args.num_patches, module_to_mapping, args.patch_list, coefficient_train=True)
     print(model)
+
     model = model.cuda()
     predict_mode(model)
 
