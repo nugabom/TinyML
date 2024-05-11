@@ -18,11 +18,11 @@ from torchvision.models import mobilenet_v2
 from typing import Callable, List, Optional
 #from torchvision.utils import _log_api_usage_once
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from ._builder import build_model_with_cfg
-from ._manipulate import checkpoint_seq
-from ._registry import register_model, model_entrypoint, generate_default_cfgs, register_model_deprecations
+from timm.models._builder import build_model_with_cfg
+from timm.models._manipulate import checkpoint_seq
+from timm.models._registry import register_model, model_entrypoint, generate_default_cfgs, register_model_deprecations
 
-__all__ = ['MobileNetV2', 'ConvNormActivation', 'InvertedResidual'] 
+__all__ = ['MobileNetV2', 'ConvNormActivation', 'InvertedResidual']
 class Add(nn.Module):
     def __init__(self):
         super().__init__()
@@ -67,7 +67,7 @@ class ConvNormActivation(torch.nn.Sequential):
             padding = (kernel_size - 1) // 2 * dilation
         if bias is None:
             bias = norm_layer is None
-        layers = [] 
+        layers = []
         layers.append(
             torch.nn.Conv2d(
                 in_channels,
@@ -140,7 +140,7 @@ class InvertedResidual(nn.Module):
             #return x + self.conv(x)
         else:
             return self.conv(x)
-            
+
 class MobileNetV2(nn.Module):
     def __init__(
             self,
@@ -168,13 +168,13 @@ class MobileNetV2(nn.Module):
         if inverted_residual_setting is None:
             inverted_residual_setting = [
                     # t, c, n, s
-                    [1, 16, 1, 1], #1 
+                    [1, 16, 1, 1], #1
                     [6, 24, 2, 2], #2
                     [6, 32, 3, 2], #3 4 5
                     [6, 64, 4, 2], # 6 7 8 9
-                    [6, 96, 3, 1], 
-                    [6, 160, 3, 2], 
-                    [6, 320, 1, 1] 
+                    [6, 96, 3, 1],
+                    [6, 160, 3, 2],
+                    [6, 320, 1, 1]
             ]
         features = [ConvNormActivation(3, input_channel, stride=2, norm_layer=norm_layer, activation_layer=nn.ReLU6,pad_layer=pad_layer)]
         n_block = 0
@@ -321,7 +321,7 @@ class MobileNetV2(nn.Module):
         final = self.features[5:](patch_out.clone())
         x = nn.functional.adaptive_avg_pool2d(final.clone(), (1, 1))
         x = torch.flatten(x,1)
-        x = self.classifier(x) 
+        x = self.classifier(x)
 
         return pad1, pad2, pad3, pad4, pad5, patch_out, final, x
 
@@ -358,7 +358,7 @@ class MobileNetV2(nn.Module):
         final = self.features[5:](patch_out.clone())
         x = nn.functional.adaptive_avg_pool2d(final.clone(), (1, 1))
         x = torch.flatten(x,1)
-        x = self.classifier(x) 
+        x = self.classifier(x)
 
         return x1, x2, x3, x4, x5, patch_out, final, x
 
@@ -376,8 +376,8 @@ class MobileNetV2(nn.Module):
             if self.teacher:
                 return self.get_features_base(x)
             else:
-                return self.get_features(x) 
-    
+                return self.get_features(x)
+
 # import torchsummary
 # import torchprofile
 # model = MobileNetV2(pad_layer='zero')

@@ -286,7 +286,7 @@ def get_attr(layer):
     s = layer.stride[0]
     return (k, s)
 
-def change_model_list(model, num_patches, Module_To_Mapping, patch_list, **kwags):
+def change_model_list(model, num_patches, Module_To_Mapping, patch_list, **kwargs):
     i = 0
     for n, target in model.named_modules():
         if i == len(patch_list):
