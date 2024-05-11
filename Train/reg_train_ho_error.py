@@ -557,11 +557,11 @@ def main():
     for n, mod in model.named_modules():
         if isinstance(mod, nn.BatchNorm2d):
             mod.track_running_stats = False
-    change_model_list(model, args.num_patches, module_to_mapping, args.patch_list)
+    change_model_list(model, args.num_patches, module_to_mapping, args.patch_list, coefficient_train=True)
     print(model)
     model = model.cuda()
     predict_mode(model)
-    
+
     learnable_params = []
     for n, params in model.named_parameters():
         if "top" in n and "top_m" not in n:
@@ -617,7 +617,7 @@ def main():
     #        loss_scaler=None if args.no_resume_opt else loss_scaler,
     #        log_info=utils.is_primary(args),
     #    )
-    
+
     # setup exponential moving average of model weights, SWA could be used here too
     #keys = checkpoint.keys()
     #targets = model.state_dict().keys()
@@ -627,12 +627,12 @@ def main():
     #for to, pre in zip(targets, keys):
     #    pre_weight_state[to] = checkpoint[pre]
     #    print(pre)
-    
+
     #patch_list = [1, 1, 3, 3, 3]
     #for block_id, patch_type in enumerate(patch_list):
     #    replace_layer_all(model, block_id, patch_type, Module_Mapping)
-    
-    
+
+
     #modules_to_replace = find_modules_to_change_first(model)
     #model = replace_module_by_names(model, modules_to_replace, Module_first_mapping)
 
@@ -973,7 +973,7 @@ def train_one_epoch(
     update_time_m = utils.AverageMeter()
     data_time_m = utils.AverageMeter()
     losses_m = utils.AverageMeter()
-    
+
     cls_loss_fn = nn.CrossEntropyLoss().to(device=device)
     kl_loss_fn = nn.KLDivLoss(reduction='batchmean').to(device=device)
 
@@ -1204,7 +1204,7 @@ def train_one_epoch(
         optimizer.sync_lookahead()
 
     return OrderedDict([
-        ('loss', losses_m.avg), 
+        ('loss', losses_m.avg),
         ])
 
 

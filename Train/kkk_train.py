@@ -37,7 +37,7 @@ from timm.models import create_model, safe_model_name, resume_checkpoint, load_c
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
-from kkk_fix_t_mode import *
+from kkk_fix import *
 
 os.environ["CUDA_VISIBLE_DEVICES"]="4,5"
 try:
@@ -517,7 +517,7 @@ def main():
     print(model)
     model = model.cuda()
     predict_mode(model)
-    
+
     learnable_params = []
     for n, params in model.named_parameters():
         a="""
@@ -572,7 +572,7 @@ def main():
     #        loss_scaler=None if args.no_resume_opt else loss_scaler,
     #        log_info=utils.is_primary(args),
     #    )
-    
+
     # setup exponential moving average of model weights, SWA could be used here too
     #keys = checkpoint.keys()
     #targets = model.state_dict().keys()
@@ -582,12 +582,12 @@ def main():
     #for to, pre in zip(targets, keys):
     #    pre_weight_state[to] = checkpoint[pre]
     #    print(pre)
-    
+
     #patch_list = [1, 1, 3, 3, 3]
     #for block_id, patch_type in enumerate(patch_list):
     #    replace_layer_all(model, block_id, patch_type, Module_Mapping)
-    
-    
+
+
     #modules_to_replace = find_modules_to_change_first(model)
     #model = replace_module_by_names(model, modules_to_replace, Module_first_mapping)
 

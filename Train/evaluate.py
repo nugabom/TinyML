@@ -39,7 +39,6 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
 #from borderkernel import *
-from proMean2px import *
 
 try:
     from apex import amp
@@ -359,6 +358,7 @@ group.add_argument('--use-multi-epochs-loader', action='store_true', default=Fal
                    help='use the multi-epochs-loader to save time at the beginning of every epoch')
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
+group.add_argument('--pad-method', default='mean', choices=['mean', 'zero', 'replicate'])
 
 
 def _parse_args():
@@ -381,6 +381,13 @@ def _parse_args():
 def main():
     utils.setup_default_logging()
     args, args_text = _parse_args()
+
+    if args.pad_method == "mean":
+        from proMean2px import *
+    elif args.pad_method == "zero":
+        from zero import *
+    elif args.pad_method == "replicate":
+        from proReplicate import *
 
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -425,8 +432,7 @@ def main():
     elif args.input_size is not None:
         in_chans = args.input_size[0]
 
-
-    model_rep = create_model(
+    model = create_model(
         args.model,
         pretrained=args.pretrained,
         in_chans=in_chans,
@@ -442,7 +448,7 @@ def main():
         **args.model_kwargs,
     )
 
-    model_ref = create_model(
+    pretrain = create_model(
         args.model,
         pretrained=args.pretrained,
         in_chans=in_chans,
@@ -569,7 +575,7 @@ def main():
     #        loss_scaler=None if args.no_resume_opt else loss_scaler,
     #        log_info=utils.is_primary(args),
     #    )
-    
+
     # setup exponential moving average of model weights, SWA could be used here too
     checkpoint = torch.load(args.resume)['state_dict']
     keys = checkpoint.keys()
@@ -582,7 +588,7 @@ def main():
 
     pretrain.load_state_dict(pre_weight_state, strict=True)
     model.load_state_dict(pre_weight_state, strict=True)
-    
+
     print(model)
     model = model.cuda()
     pretrain = pretrain.to(device)
@@ -793,9 +799,9 @@ def main():
             f'Scheduled epochs: {num_epochs}. LR stepped per {"epoch" if lr_scheduler.t_in_epochs else "update"}.')
 
 
-    
+
     boolean = [0, 1]
-    
+
     label_0 = [tt[0] for tt in product(boolean, repeat=args.per_patch_stage)]
     label_1 = [tt[1] for tt in product(boolean, repeat=args.per_patch_stage)]
     label_2 = [tt[2] for tt in product(boolean, repeat=args.per_patch_stage)]
@@ -828,13 +834,13 @@ def main():
             checkpoint_path=args.initial_checkpoint,
             **args.model_kwargs,
         )
-        
+
         model.load_state_dict(pre_weight_state, strict=False)
         change_model_list(model, args.num_patches, module_to_mapping, tt)
         model = model.to(device)
         print(f"=============== logging {tt} ==============")
         result = validate_MSE(model, loader_eval,validate_mse_fn, args, amp_autocast=amp_autocast, pretrain=pretrain)
-        
+
         feat_loss_0.append(result["MSE_0"])
         feat_loss_1.append(result["MSE_1"])
         feat_loss_2.append(result["MSE_2"])
@@ -842,7 +848,7 @@ def main():
         feat_loss_4.append(result["MSE_4"])
 
         setattr(model, "with_feat", None)
-        acc = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast) 
+        acc = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
         accs.append(acc)
         assert type(acc) == float, f"acc is not float {type(acc)}"
     HO_search = {
@@ -859,7 +865,7 @@ def main():
         "Acc": accs
     }
     df = pd.DataFrame(data = HO_search)
-    df.to_csv("TinyMB_w35_r144_p3_mean.csv", index=False)
+    df.to_csv("TinyMB_w35_r144_p3_rep.csv", index=False)
     exit()
     try:
         for epoch in range(start_epoch, num_epochs):
@@ -1103,7 +1109,7 @@ def train_one_epoch(
 
 def validate_MSE (
         model,
-        loader, 
+        loader,
         loss_fn,
         args,
         amp_autocast,
@@ -1123,7 +1129,7 @@ def validate_MSE (
     setattr(pretrain, "with_feat", True)
     setattr(pretrain, "teacher", True)
     setattr(model, "teacher", None)
-    
+
     setattr(pretrain, "teacher", True)
 
     model.update()
@@ -1139,7 +1145,7 @@ def validate_MSE (
 
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
-           
+
             with amp_autocast():
                 out_student = model(input)
                 out_teacher = pretrain(input)
