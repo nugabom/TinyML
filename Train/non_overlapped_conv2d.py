@@ -82,6 +82,105 @@ class NonOverlappedConv2d(nn.Module):
                 pad_t[:, :, :, :, :, 1::2] = new_pad_t
                 pad_l[:, :, :, :, 1::2, :] = new_pad_l
         else:
+            if self.pad_method == "zero":
+                pad_t = torch.zeros_like(patch[:, :, :, :,  0:1,   :])
+                pad_l = torch.zeros_like(patch[:, :, :, :,   :,  0:1])
+                pad_t_l = torch.zeros_like(patch[:, :, :, :,  0:1,  0:1])
+            elif self.pad_method == "mean":
+                pad_t = torch.mean(patch[:, :, :, :,  :2,   :], dim=-2, keepdim=True)
+                pad_l = torch.mean(patch[:, :, :, :,   :,  :2], dim=-1, keepdim=True)
+                pad_t_l = patch[:, :, :, :,  :1,  :1].clone()
+            elif self.pad_method == "replicate":
+                pad_t = patch[:, :, :, :,  0:1,   :].clone()
+                pad_l = patch[:, :, :, :,   :,  0:1].clone()
+                pad_t_l = patch[:, :, :, :,  0:1,  0:1].clone()
+            elif self.pad_method == "reflect":
+                pad_t = patch[:, :, :, :,  1:2,   :].clone()
+                pad_l = patch[:, :, :, :,   :,  1:2].clone()
+                pad_t_l = patch[:, :, :, :,  1:2,  1:2].clone()
+            elif self.pad_method == "predict":
+                pad_t = torch.sum(self.t * patch[:, :, :, :,  :2,   :], dim=-2, keepdim=True)
+                pad_l = torch.sum(self.l * patch[:, :, :, :,   :,  :2], dim=-1, keepdim=True)
+                pad_t_l = patch[:, :, :, :,  :1,  :1].clone()
+
+        # When Stride=1, Use Bottom / Left
+        if self.stride == 1:
+            if self.pad_method == "zero":
+                pad_b = torch.zeros(B, C, self.ph, self.pw, 1, W).to(self.d)
+                pad_r = torch.zeros(B, C, self.ph, self.pw, H, 1).to(self.d)
+                pad_corner = torch.zeros(B, C, self.ph, self.pw, 1, 1).to(self.d)
+                pad_t_r = pad_corner
+                pad_b_l = pad_corner
+                pad_b_r = pad_corner
+            elif self.pad_method == "mean":
+                pad_b = torch.mean(patch[:, :, :, :, -2:,   :], dim=-2, keepdim=True)
+                pad_r = torch.mean(patch[:, :, :, :,   :, -2:], dim=-1, keepdim=True)
+                pad_t_r = patch[:, :, :, :,  0:1, -1:].clone()
+                pad_b_l = patch[:, :, :, :, -1:,  0:1].clone()
+                pad_b_r = patch[:, :, :, :, -1:, -1:].clone()
+            elif self.pad_method == "replicate":
+                pad_b = patch[:, :, :, :, -1:,   :].clone()
+                pad_r = patch[:, :, :, :,   :, -1:].clone()
+                pad_t_r = patch[:, :, :, :,  0:1, -1:].clone()
+                pad_b_l = patch[:, :, :, :, -1:,  0:1].clone()
+                pad_b_r = patch[:, :, :, :, -1:, -1:].clone()
+            elif self.pad_method == "reflect":
+                pad_b = patch[:, :, :, :, -2:-1,   :].clone()
+                pad_r = patch[:, :, :, :,   :, -2:-1].clone()
+                pad_t_r = patch[:, :, :, :,  1:2, -2:-1].clone()
+                pad_b_l = patch[:, :, :, :, -2:-1,  1:2].clone()
+                pad_b_r = patch[:, :, :, :, -2:-1, -2:-1].clone()
+            elif self.pad_method == "predict":
+                pad_b = torch.sum(self.b * patch[:, :, :, :, -2:,   :], dim=-2, keepdim=True)
+                pad_r = torch.sum(self.r * patch[:, :, :, :,   :, -2:], dim=-1, keepdim=True)
+                pad_t_r = patch[:, :, :, :,  0:1, -1:].clone()
+                pad_b_l = patch[:, :, :, :, -1:,  0:1].clone()
+                pad_b_r = patch[:, :, :, :, -1:, -1:].clone()
+
+            patch_top = torch.cat([pad_t_l, pad_t, pad_t_r], dim=-1)
+            patch_mid = torch.cat([pad_l, patch, pad_r], dim=-1)
+            patch_bot = torch.cat([pad_b_l, pad_b, pad_b_r], dim=-1)
+            non_overlapped_patch = torch.cat([patch_top, patch_mid, patch_bot], dim=-2)
+        else:
+            patch_top = torch.cat([pad_t_l, pad_t], dim=-1)
+            patch_mid = torch.cat([pad_l, patch], dim=-1)
+            non_overlapped_patch = torch.cat([patch_top, patch_mid], dim=-2)
+
+        return non_overlapped_patch
+
+    def _forward_non_overlapping_shift(self, x):
+        ph_size = x.size(2) // self.ph
+        pw_size = x.size(3) // self.pw
+        x = F.pad(x, ((-self.shift) % pw_size, self.shift % pw_size, (-self.shift) % ph_size, self.shift % ph_size), mode='constant', value=0.0)
+        patch = rearrange(x, "B C (ph H) (pw W) -> B C ph pw H W", ph=self.ph+1, pw=self.pw+1)
+        B, C, _, _, H, W = patch.size()
+
+        if self.sampling:
+            padded_x = F.pad(x, (1, 1, 1, 1), mode='constant', value=0.0)
+            overlapped_patch = padded_x.unfold(2, H + 2, H).unfold(3, W + 2, W)
+            # Pad Top, Left, Top-Left
+            pad_t   = overlapped_patch[:, :, :, :,  0:1, 1:-1].clone()
+            pad_l   = overlapped_patch[:, :, :, :, 1:-1,  0:1].clone()
+            pad_t_l = overlapped_patch[:, :, :, : , 0:1,  0:1].clone()
+            if self.sample_width > 1:
+                if self.pad_method == "zero":
+                    new_pad_t = 0
+                    new_pad_l = 0
+                elif self.pad_method == "mean":
+                    new_pad_t = torch.mean(self.t * patch[:, :, :, :, :2,  1::2], dim=-2, keepdim=True)
+                    new_pad_l = torch.mean(self.l * patch[:, :, :, :, 1::2,  :2], dim=-1, keepdim=True)
+                elif self.pad_method == "replicate":
+                    new_pad_t = patch[:, :, :, :, :1,  1::2].clone()
+                    new_pad_l = patch[:, :, :, :, 1::2,  :1].clone()
+                elif self.pad_method == "reflect":
+                    new_pad_t = patch[:, :, :, :, 1:2,  1::2].clone()
+                    new_pad_l = patch[:, :, :, :, 1::2,  1:2].clone()
+                elif self.pad_method == "predict":
+                    new_pad_t = torch.sum(self.t * patch[:, :, :, :, :2,  1::2], dim=-2, keepdim=True)
+                    new_pad_l = torch.sum(self.l * patch[:, :, :, :, 1::2,  :2], dim=-1, keepdim=True)
+                pad_t[:, :, :, :, :, 1::2] = new_pad_t
+                pad_l[:, :, :, :, 1::2, :] = new_pad_l
+        else:
             # If you use zero padding with non-sampling
             if self.pad_method == "zero":
                 non_overlapped_patch = F.pad(patch, (1, 1, 1, 1), mode='constant', value=0.0)
@@ -164,195 +263,6 @@ class NonOverlappedConv2d(nn.Module):
             non_overlapped_patch = torch.cat([patch_top, patch_mid], dim=-2)
 
         return non_overlapped_patch
-
-    def _forward_non_overlapping_shift(self, x):
-        N, C, IH, IW = x.size()
-
-        # Generate indices for GEMM-based Convolution (with im2col)
-        if self.hw_indices == None and self.ih != IH and self.iw != IW:
-            ph_size = IH // self.ph
-            pw_size = IW // self.pw
-            i = []
-            OH = (IH + self.stride - 1) // self.stride
-            OW = (IW + self.stride - 1) // self.stride
-            self.ih = IH
-            self.iw = IW
-            self.oh = OH
-            self.ow = OW
-
-            # index
-            zero_index = IH * IW
-            t_index = zero_index + 1
-            b_index = t_index + (self.ph - 1) * IW
-            l_index = b_index + (self.ph - 1) * IW
-            r_index = l_index + (self.pw - 1) * IH
-
-            if self.pad_method in ["mean", "predict"]:
-                self.pad_t_index = []
-                self.pad_b_index = []
-                self.pad_l_index = []
-                self.pad_r_index = []
-                for ph_idx in range(self.ph):
-                    if ph_idx > 0:
-                        oh_start = ph_size * ph_idx + self.output_shift
-                        self.pad_t_index.append(oh_start)
-                        self.pad_t_index.append(oh_start+1)
-                    if ph_idx < self.ph - 1:
-                        oh_end = ph_size * (ph_idx + 1) + self.output_shift
-                        self.pad_b_index.append(oh_end-2)
-                        self.pad_b_index.append(oh_end-1)
-                for pw_idx in range(self.pw):
-                    if pw_idx > 0:
-                        ow_start = pw_size * pw_idx + self.output_shift
-                        self.pad_l_index.append(ow_start)
-                        self.pad_l_index.append(ow_start+1)
-                    if pw_idx < self.pw - 1:
-                        ow_end = pw_size * (pw_idx + 1) + self.output_shift
-                        self.pad_r_index.append(ow_end-2)
-                        self.pad_r_index.append(oh_end-1)
-
-
-            for ph_idx in range(self.ph):
-                # Set oh_start
-                if ph_idx == 0:
-                    oh_start = 0
-                else:
-                    oh_start = ph_size * ph_idx + self.output_shift
-
-                # Set oh_end
-                if ph_idx == self.ph - 1:
-                    oh_end = OH
-                else:
-                    oh_end = ph_size * (ph_idx + 1) + self.output_shift
-
-                for oh in range(oh_start, oh_end):
-                    for pw_idx in range(self.pw):
-                        # Set ow_start
-                        if pw_idx == 0:
-                            ow_start = 0
-                        else:
-                            ow_start = pw_size + pw_idx + self.output_shift
-
-                        # Set ow_end
-                        if pw_idx == self.pw - 1:
-                            ow_end = OW
-                        else:
-                            ow_end = pw_size * (pw_idx + 1) + self.output_shift
-
-
-                        for ow in range(ow_start, ow_end):
-                            patch_t = (oh == oh_start)
-                            patch_b = (oh == oh_end - 1)
-                            patch_l = (ow == ow_start)
-                            patch_r = (ow == ow_end - 1)
-                            patch_t_l = (patch_t and patch_l)
-                            patch_t_r = (patch_t and patch_r)
-                            patch_b_l = (patch_b and patch_l)
-                            patch_b_r = (patch_b and patch_r)
-
-                            is_sample_t = (patch_t and ph_idx > 0)
-                            is_sample_l = (patch_l and pw_idx > 0)
-                            is_sample_candidate = (self.sampling and (is_sample_t or is_sample_l))
-
-                            if self.pad_method == "zero":
-                                for kh in [-1, 0, 1]:
-                                    for kw in [-1, 0, 1]:
-                                        ih = oh * self.stride + kh
-                                        iw = ow * self.stride + kw
-
-                                        if ih == -1 or ih == IH or iw == -1 or iw == IW:
-                                            i.append(zero_index)
-                                        elif is_sample_candidate and ((is_sample_t and kh == -1) or (is_sample_l and kw == -1)):
-                                            i.append(ih * IW + iw)
-                                        elif (patch_t and kh == -1) or (patch_b and kh == 1) or (patch_l and kw == -1) or (patch_r and kw == 1):
-                                            i.append(zero_index)
-                                        else:
-                                            i.append(ih * IW + iw)
-                            elif self.pad_method in ["replicate", "reflect"]:
-                                offset = 1 if self.pad_method == "replicate" else 2
-                                for kh in [-1, 0, 1]:
-                                    for kw in [-1, 0, 1]:
-                                        ih = oh * self.stride + kh
-                                        iw = ow * self.stride + kw
-
-                                        if ih == -1 or ih == IH or iw == -1 or iw == IW:
-                                            i.append(zero_index)
-                                        elif is_sample_candidate and ((is_sample_t and kh == -1) or (is_sample_l and kw == -1)):
-                                            i.append(ih * IW + iw)
-                                        elif patch_t_l and kh == -1 and kw == -1:
-                                            i.append((ih + offset) * IW + iw + offset)
-                                        elif patch_t_r and kh == -1 and kw == 1:
-                                            i.append((ih + offset) * IW + iw - offset)
-                                        elif patch_b_l and kh == 1 and kw == -1:
-                                            i.append((ih - offset) * IW + iw + offset)
-                                        elif patch_b_r and kh == 1 and kw == 1:
-                                            i.append((ih - offset) * IW + iw - offset)
-                                        elif patch_t and kh == -1:
-                                            i.append((ih + offset) * IW + iw)
-                                        elif patch_b and kh == 1:
-                                            i.append((ih - offset) * IW + iw)
-                                        elif patch_l and kw == -1:
-                                            i.append(ih * IW + iw + offset)
-                                        elif patch_r and kw == 1:
-                                            i.append((ih * IW + iw - offset))
-                                        else:
-                                            i.append(ih * IW + iw)
-                            elif self.pad_method in ["mean", "predict"]:
-                                for kh in [-1, 0, 1]:
-                                    for kw in [-1, 0, 1]:
-                                        ih = oh * self.stride + kh
-                                        iw = ow * self.stride + kw
-
-                                        if ih == -1 or ih == IH or iw == -1 or iw == IW:
-                                            i.append(zero_index)
-                                        elif is_sample_candidate and ((is_sample_t and kh == -1) or (is_sample_l and kw == -1)):
-                                            i.append(ih * IW + iw)
-                                        elif patch_t_l and kh == -1 and kw == -1:
-                                            i.append((ih + 1) * IW + iw + 1)
-                                        elif patch_t_r and kh == -1 and kw == 1:
-                                            i.append((ih + 1) * IW + iw - 1)
-                                        elif patch_b_l and kh == 1 and kw == -1:
-                                            i.append((ih - 1) * IW + iw + 1)
-                                        elif patch_b_r and kh == 1 and kw == 1:
-                                            i.append((ih - 1) * IW + iw - 1)
-                                        elif patch_t and kh == -1:
-                                            i.append(t_index + (ph_idx - 1) * IW + iw)
-                                        elif patch_b and kh == 1:
-                                            i.append(b_index + (ph_idx) * IW + iw)
-                                        elif patch_l and kw == -1:
-                                            i.append(l_index + (pw_idx - 1) * IH + ih)
-                                        elif patch_r and kw == 1:
-                                            i.append(r_index + (pw_idx) * IH + ih)
-                                        else:
-                                            i.append(ih * IW + iw)
-            self.hw_indices = torch.LongTensor(i).to(self.d)
-
-        cat_list = [x.reshape(N, C, IH * IW), torch.zeros(N, C, 1).to(self.d)]
-
-        if self.pad_method == "mean":
-            pad_t = torch.mean(x[:, :, self.pad_t_index, :].reshape(N, C, self.ph-1, 2, IW), dim=-2).reshape(N, C, -1)
-            pad_b = torch.mean(x[:, :, self.pad_b_index, :].reshape(N, C, self.ph-1, 2, IW), dim=-2).reshape(N, C, -1)
-            pad_l = torch.mean(x[:, :, :, self.pad_l_index].reshape(N, C, IH, self.pw-1, 2), dim=-1).reshape(N, C, -1)
-            pad_r = torch.mean(x[:, :, :, self.pad_r_index].reshape(N, C, IH, self.pw-1, 2), dim=-1).reshape(N, C, -1)
-            cat_list.extend([pad_t, pad_b, pad_l, pad_r])
-        elif self.pad_method == "predict":
-            pad_t = torch.sum(self.t * x[:, :, self.pad_t_index, :].reshape(N, C, self.ph-1, 2, IW), dim=-2).reshape(N, C, -1)
-            pad_b = torch.sum(self.b * x[:, :, self.pad_b_index, :].reshape(N, C, self.ph-1, 2, IW), dim=-2).reshape(N, C, -1)
-            pad_l = torch.sum(self.l * x[:, :, :, self.pad_l_index].reshape(N, C, IH, self.pw-1, 2), dim=-1).reshape(N, C, -1)
-            pad_r = torch.sum(self.r * x[:, :, :, self.pad_r_index].reshape(N, C, IH, self.pw-1, 2), dim=-1).reshape(N, C, -1)
-            cat_list.extend([pad_t, pad_b, pad_l, pad_r])
-
-        im2col_x = torch.cat(cat_list, dim=-1)[:, :, self.hw_indices]  # (N, C, OH * OW * KH * KW)
-        if self.conv.groups == 1:
-            im2col_x = im2col_x.permute(0, 2, 1).reshape(N, -1, 9 * C)
-        else:
-            im2col_x = im2col_x.reshape(-1, 9)
-        out_channels = self.conv.out_channels
-        transposed_weight = self.conv.weight.permute(2, 3, 1, 0).reshape(-1, out_channels)
-        out = torch.matmul(im2col_x, transposed_weight)
-        out = out.reshape(-1, self.oh, self.ow, out_channels).permute(0, 3, 1, 2)
-        return out
-
 
     def forward(self, x):
         if self.output_shift == 0:
