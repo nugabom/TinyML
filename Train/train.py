@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 """ ImageNet Training Script
 
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
@@ -33,13 +33,14 @@ from timm import utils
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
 from timm.loss import JsdCrossEntropy, SoftTargetCrossEntropy, BinaryCrossEntropy, LabelSmoothingCrossEntropy
-from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters, custom_padding
+from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
-from kkk_fix_sampling import *
 
-os.environ["CUDA_VISIBLE_DEVICES"]="4,5,6,7"
+from non_overlapped_conv2d import transform_with_non_overlapping
+from models.mobilenetv2 import *
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -145,8 +146,6 @@ group.add_argument('--grad-checkpointing', action='store_true', default=False,
 group.add_argument('--fast-norm', default=False, action='store_true',
                    help='enable experimental fast-norm')
 group.add_argument('--model-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
-group.add_argument("--num-patches", type=int)
-group.add_argument("--patch-list", nargs="*", type=int)
 
 group.add_argument('--head-init-scale', default=None, type=float,
                    help='Head initialization scale')
@@ -360,6 +359,20 @@ group.add_argument('--use-multi-epochs-loader', action='store_true', default=Fal
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
 
+# For patch-based inference model
+group.add_argument("--n-patch-h", type=int, default=2)
+group.add_argument("--n-patch-w", type=int, default=2)
+group.add_argument("--patch-list", nargs="*", type=int)
+group.add_argument("--pivot-idx", type=int, default=0)
+group.add_argument("--coefficient-train", action='store_true', default=False)
+group.add_argument("--coefficient-value", type=float, default=0.5)
+group.add_argument("--coefficient-random-init", action='store_true', default=False)
+group.add_argument("--sampling", action='store_true', default=False)
+group.add_argument("--sample-width", type=int, default=1, choices=[1, 2])
+group.add_argument("--pad-method", type=str, default="predict", choices=["mean", "zero", "replicate", "reflect", "predict"])
+group.add_argument("--first-evaluate", action='store_true', default=False)
+
+
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -511,16 +524,13 @@ def main():
                 f'Learning rate ({args.lr}) calculated from base learning rate ({args.lr_base}) '
                 f'and effective global batch size ({global_batch_size}) with {args.lr_base_scale} scaling.')
 
+    transform_with_non_overlapping(model, args)
     checkpoint = torch.load(args.resume)['state_dict']
-    change_model_list(model, args.num_patches, module_to_mapping, args.patch_list)
     model.load_state_dict(checkpoint, strict=False)
     print(model)
-    model = model.cuda()
-    predict_mode(model)
-    
+
     learnable_params = []
     for n, params in model.named_parameters():
-        a="""
         if "top_m" in n:
             continue
         if "left_m" in n:
@@ -529,8 +539,8 @@ def main():
             continue
         if "bot_m" in n:
             continue
-        """
         learnable_params.append(params)
+
     optimizer = create_optimizer_v2(
         learnable_params,
         **optimizer_kwargs(cfg=args),
@@ -564,38 +574,7 @@ def main():
 
     # optionally resume from a checkpoint
     resume_epoch = None
-    #if args.resume:
-    #    resume_epoch = resume_checkpoint(
-    #        model,
-    #        args.resume,
-    #        optimizer=None if args.no_resume_opt else optimizer,
-    #        loss_scaler=None if args.no_resume_opt else loss_scaler,
-    #        log_info=utils.is_primary(args),
-    #    )
-    
-    # setup exponential moving average of model weights, SWA could be used here too
-    #keys = checkpoint.keys()
-    #targets = model.state_dict().keys()
-    #pre_weight_state = {}
 
-    #assert len(targets) == len(keys), 'error'
-    #for to, pre in zip(targets, keys):
-    #    pre_weight_state[to] = checkpoint[pre]
-    #    print(pre)
-    
-    #patch_list = [1, 1, 3, 3, 3]
-    #for block_id, patch_type in enumerate(patch_list):
-    #    replace_layer_all(model, block_id, patch_type, Module_Mapping)
-    
-    
-    #modules_to_replace = find_modules_to_change_first(model)
-    #model = replace_module_by_names(model, modules_to_replace, Module_first_mapping)
-
-    #modules_to_replace = find_modules_to_change_stride1(model)
-    #model = replace_module_by_names(model, modules_to_replace, Module_stride1_mapping)
-
-    #modules_to_replace = find_modules_to_change_stride2(model)
-    #model = replace_module_by_names(model, modules_to_replace, Module_stride2_mapping)
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before DDP wrapper
@@ -811,13 +790,14 @@ def main():
         _logger.info(
             f'Scheduled epochs: {num_epochs}. LR stepped per {"epoch" if lr_scheduler.t_in_epochs else "update"}.')
 
-    eval_metrics = validate(
-                model,
-                loader_eval,
-                validate_loss_fn,
-                args,
-                amp_autocast=amp_autocast,
-            )
+    if args.first_evaluate:
+        eval_metrics = validate(
+                    model,
+                    loader_eval,
+                    validate_loss_fn,
+                    args,
+                    amp_autocast=amp_autocast,
+                )
 
     try:
         for epoch in range(start_epoch, num_epochs):
@@ -924,7 +904,6 @@ def train_one_epoch(
     update_time_m = utils.AverageMeter()
     data_time_m = utils.AverageMeter()
     losses_m = utils.AverageMeter()
-    padding_m = utils.AverageMeter()
 
     model.train()
 
@@ -1018,9 +997,7 @@ def train_one_epoch(
 
             if args.distributed:
                 reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
-                #padding_loss = utils.reduce_tensor(pad_loss.data, args.world_size)
                 losses_m.update(reduced_loss.item() * accum_steps, input.size(0))
-                #padding_m.update(padding_loss.item() * accum_steps, input.size(0))
                 update_sample_count *= args.world_size
 
             if utils.is_primary(args):
@@ -1056,7 +1033,7 @@ def train_one_epoch(
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
 
-    return OrderedDict([('loss', losses_m.avg), ('padding', padding_m.avg)])
+    return OrderedDict([('loss', losses_m.avg)])
 
 
 def validate(
