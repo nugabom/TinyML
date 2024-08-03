@@ -1,0 +1,18 @@
+import torch
+import torch.nn.functional as F
+
+def get_size(x, l, r, ph, pw):
+    _, _, _, h, w = x.size()
+    patch_h = h // ph
+    patch_w = w // pw
+
+    padded_x = F.pad(x, (l, r, l, r), mode='constant', value=0.0)
+    return padded_x.unfold(2, patch_h + l + r, patch_h).unfold(3, patch_w + l + r, patch_w)
+
+
+def fused_opt_overlap(x, l, r, patch_info):
+    N, a, b, c = patch_info
+
+    for pid in range(N ** 2):
+        row, col = pid // N, col % N
+        
