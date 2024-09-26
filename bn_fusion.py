@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.function as F
 def fuse_bn_sequential(block):
     """
         y = gamma*(conv(x,w)-mu)/sqrt(var+epsilon)+beta
