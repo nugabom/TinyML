@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 """ ImageNet Training Script
 
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
@@ -33,13 +33,25 @@ from timm import utils
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
 from timm.loss import JsdCrossEntropy, SoftTargetCrossEntropy, BinaryCrossEntropy, LabelSmoothingCrossEntropy
-from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters, custom_padding
+from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
+
+from models.mobilenetv2 import *
+#from best_sampling_Mean2px import *
+#from pproMean2px_1 import *
+#from proLearn import *
+#from sampled_zero import *
 from kkk_fix import *
 
-os.environ["CUDA_VISIBLE_DEVICES"]="4,5"
+def get_size(x, l, r, ph, pw):
+    _, _, h, w = x.size()
+    patch_h = h // ph
+    patch_w = w // pw
+    padded_x = F.pad(x, (l, r, l, r), mode='constant', value=0.0)
+    return padded_x.unfold(2, patch_h + l + r, patch_h).unfold(3, patch_w + l + r, patch_w).detach()
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -360,6 +372,16 @@ group.add_argument('--use-multi-epochs-loader', action='store_true', default=Fal
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
 
+# co-efficient training
+group.add_argument("--reg_padding0", default=1.0, type=float)
+group.add_argument("--reg_padding1", default=1.0, type=float)
+group.add_argument("--reg_padding2", default=1.0, type=float)
+group.add_argument("--reg_padding3", default=1.0, type=float)
+group.add_argument("--reg_padding4", default=1.0, type=float)
+
+group.add_argument("--reg_patch_out", default=1.0, type=float)
+group.add_argument("--reg_cnn_out", default=1.0, type=float)
+
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -440,6 +462,21 @@ def main():
         checkpoint_path=args.initial_checkpoint,
         **args.model_kwargs,
     )
+    pretrain = create_model(
+        args.model,
+        pretrained=args.pretrained,
+        in_chans=in_chans,
+        num_classes=args.num_classes,
+        drop_rate=args.drop,
+        drop_path_rate=args.drop_path,
+        drop_block_rate=args.drop_block,
+        global_pool=args.gp,
+        bn_momentum=args.bn_momentum,
+        bn_eps=args.bn_eps,
+        scriptable=args.torchscript,
+        checkpoint_path=args.initial_checkpoint,
+        **args.model_kwargs,
+    )
     if args.head_init_scale is not None:
         with torch.no_grad():
             model.get_classifier().weight.mul_(args.head_init_scale)
@@ -473,6 +510,7 @@ def main():
 
     # move model to GPU, enable channels last layout if set
     model.to(device=device)
+    pretrain.to(device=device)
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
 
@@ -511,32 +549,44 @@ def main():
                 f'Learning rate ({args.lr}) calculated from base learning rate ({args.lr_base}) '
                 f'and effective global batch size ({global_batch_size}) with {args.lr_base_scale} scaling.')
 
-    change_model_list(model, args.num_patches, module_to_mapping, args.patch_list)
     checkpoint = torch.load(args.resume)['state_dict']
-    model.load_state_dict(checkpoint, strict=False)
+    pre_weight = {}
+    for to, pre in zip(model.state_dict(), checkpoint):
+        pre_weight[to] = checkpoint[pre]
+    model.load_state_dict(pre_weight, strict=True)
+    pretrain.load_state_dict(pre_weight, strict=True)
+
+    # Fix batchnorm running stats
+    for n, mod in model.named_modules():
+        if isinstance(mod, nn.BatchNorm2d):
+            mod.track_running_stats = False
+
+    # Convert model according to the non-overlapping configurations
+    change_model_list(model, args.num_patches, module_to_mapping, args.patch_list, coefficient_train=True)
     print(model)
+
     model = model.cuda()
     predict_mode(model)
 
     learnable_params = []
     for n, params in model.named_parameters():
-        a="""
-        if "top_m" in n:
-            continue
-        if "left_m" in n:
-            continue
-        if "right_m" in n:
-            continue
-        if "bot_m" in n:
-            continue
-        """
-        learnable_params.append(params)
+        if "top" in n and "top_m" not in n:
+            learnable_params.append(params)
+        if "left" in n and "left_m" not in n:
+            learnable_params.append(params)
+        if "right" in n and "right_m" not in n:
+            learnable_params.append(params)
+        if "bot" in n and "bot_m" not in n:
+            learnable_params.append(params)
     optimizer = create_optimizer_v2(
         learnable_params,
         **optimizer_kwargs(cfg=args),
         **args.opt_kwargs,
     )
 
+    for n, mod in model.named_modules():
+        if isinstance(mod, nn.BatchNorm2d):
+            mod.track_running_stats = False
     # setup automatic mixed-precision (AMP) loss scaling and op casting
     amp_autocast = suppress  # do nothing
     loss_scaler = None
@@ -561,6 +611,7 @@ def main():
     else:
         if utils.is_primary(args):
             _logger.info('AMP not enabled. Training in float32.')
+
 
     # optionally resume from a checkpoint
     resume_epoch = None
@@ -616,6 +667,7 @@ def main():
             if utils.is_primary(args):
                 _logger.info("Using native Torch DistributedDataParallel.")
             model = NativeDDP(model, device_ids=[device], broadcast_buffers=not args.no_ddp_bb, find_unused_parameters=True)
+            pretrain = NativeDDP(pretrain, device_ids=[device], broadcast_buffers=not args.no_ddp_bb, find_unused_parameters=True)
             print("kucha NativeDPP ON?")
         # NOTE: EMA model does not need to be wrapped by DDP
 
@@ -746,6 +798,7 @@ def main():
             train_loss_fn = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
     else:
         train_loss_fn = nn.CrossEntropyLoss()
+    train_loss_fn = nn.MSELoss().to(device=device)
     train_loss_fn = train_loss_fn.to(device=device)
     validate_loss_fn = nn.CrossEntropyLoss().to(device=device)
 
@@ -810,7 +863,7 @@ def main():
     if utils.is_primary(args):
         _logger.info(
             f'Scheduled epochs: {num_epochs}. LR stepped per {"epoch" if lr_scheduler.t_in_epochs else "update"}.')
-
+    a="""
     eval_metrics = validate(
                 model,
                 loader_eval,
@@ -818,7 +871,7 @@ def main():
                 args,
                 amp_autocast=amp_autocast,
             )
-
+    """
     try:
         for epoch in range(start_epoch, num_epochs):
             if hasattr(dataset_train, 'set_epoch'):
@@ -829,6 +882,7 @@ def main():
             train_metrics = train_one_epoch(
                 epoch,
                 model,
+                pretrain,
                 loader_train,
                 optimizer,
                 train_loss_fn,
@@ -900,6 +954,7 @@ def main():
 def train_one_epoch(
         epoch,
         model,
+        pretrain,
         loader,
         optimizer,
         loss_fn,
@@ -924,9 +979,26 @@ def train_one_epoch(
     update_time_m = utils.AverageMeter()
     data_time_m = utils.AverageMeter()
     losses_m = utils.AverageMeter()
-    padding_m = utils.AverageMeter()
 
+    cls_loss_fn = nn.CrossEntropyLoss().to(device=device)
+    kl_loss_fn = nn.KLDivLoss(reduction='batchmean').to(device=device)
+
+    padding0_loss_m = utils.AverageMeter()
+    padding1_loss_m = utils.AverageMeter()
+    padding2_loss_m = utils.AverageMeter()
+    padding3_loss_m = utils.AverageMeter()
+    padding4_loss_m = utils.AverageMeter()
+    out_loss_m = utils.AverageMeter()
+    final_loss_m = utils.AverageMeter()
+    cls_loss_m = utils.AverageMeter()
+    kl_loss_m = utils.AverageMeter()
+
+    model.module.with_feat = True
+    model.module.teacher = False
     model.train()
+    pretrain.eval()
+    pretrain.module.teacher = True
+    pretrain.module.with_feat = True
 
     accum_steps = args.grad_accum_steps
     last_accum_steps = len(loader) % accum_steps
@@ -958,10 +1030,33 @@ def train_one_epoch(
         def _forward():
             with amp_autocast():
                 output = model(input)
-                loss = loss_fn(output, target)
+                output1 = pretrain(input)
+                #loss = loss_fn(output, target)
+                #padding0_loss = loss_fn(output[0], get_size(output1[0], 1, 0, args.num_patches, args.num_patches))
+                padding0_loss = loss_fn(get_size(output[0], 1, 0, args.num_patches, args.num_patches), get_size(output1[0], 1, 0, args.num_patches, args.num_patches))
+                padding1_loss = loss_fn(output[1], get_size(output1[1], 1, 1, args.num_patches, args.num_patches))
+                padding2_loss = loss_fn(output[2], get_size(output1[2], 1, 0, args.num_patches, args.num_patches))
+                padding3_loss = loss_fn(get_size(output[3], 1, 1, args.num_patches, args.num_patches), get_size(output1[3], 1, 1, args.num_patches, args.num_patches))
+                #padding3_loss = loss_fn(output[3], get_size(output1[3], 1, 1, args.num_patches, args.num_patches))
+                padding4_loss = loss_fn(get_size(output[4], 1, 0, args.num_patches, args.num_patches), get_size(output1[4], 1, 0, args.num_patches, args.num_patches))
+                #padding4_loss = loss_fn(output[4], get_size(output1[4], 1, 0, args.num_patches, args.num_patches))
+                out_loss = loss_fn(output[5], output1[5].detach())
+                final_loss = loss_fn(output[6], output1[6].detach())
+                cls_loss = cls_loss_fn(output[7], target)
+                kl_loss = kl_loss_fn(F.log_softmax(output[7], dim=1), F.softmax(output1[7].detach(), dim=1))
+
             if accum_steps > 1:
-                loss /= accum_steps
-            return loss
+                #loss /= accum_steps
+                padding0_loss /= accum_steps
+                padding1_loss /= accum_steps
+                padding2_loss /= accum_steps
+                padding3_loss /= accum_steps
+                padding4_loss /= accum_steps
+                out_loss /= accum_steps
+                final_loss /= accum_steps
+                cls_loss /= accum_steps
+                kl_loss /= accum_steps
+            return padding0_loss, padding1_loss, padding2_loss, padding3_loss, padding4_loss, out_loss, final_loss, cls_loss, kl_loss
 
         def _backward(_loss):
             if loss_scaler is not None:
@@ -987,14 +1082,44 @@ def train_one_epoch(
 
         if has_no_sync and not need_update:
             with model.no_sync():
-                loss = _forward()
+                #loss = _forward()
+                padding0_loss, padding1_loss, padding2_loss, padding3_loss, padding4_loss, out_loss, final_loss, cls_loss, kl_loss = _forward()
+                #loss = out_loss +(padding0_loss + padding1_loss + padding2_loss + padding3_loss + padding4_loss)
+                #loss = 0.8 * cls_loss + 0.1 * kl_loss + 0.1/7 * (padding0_loss + padding1_loss + padding2_loss + padding3_loss + padding4_loss + out_loss + final_loss)
+                loss = args.reg_patch_out * out_loss \
+                + args.reg_cnn_out * final_loss \
+                + args.reg_padding0 * padding0_loss \
+                + args.reg_padding1 * padding1_loss \
+                + args.reg_padding2 * padding2_loss \
+                + args.reg_padding3 * padding3_loss \
+                + args.reg_padding4 *padding4_loss
                 _backward(loss)
         else:
-            loss = _forward()
-            _backward(loss)
-
+            #loss = _forward()
+            padding0_loss, padding1_loss, padding2_loss, padding3_loss, padding4_loss, out_loss,final_loss, cls_loss, kl_loss = _forward()
+            #loss = out_loss + (padding0_loss + padding1_loss + padding2_loss + padding3_loss + padding4_loss)
+            #loss = 0.8 * cls_loss + 0.1 * kl_loss + 0.1/7 * (padding0_loss + padding1_loss + padding2_loss + padding3_loss + padding4_loss + out_loss + final_loss)
+            #loss = out_loss + final_loss
+            loss = args.reg_patch_out * out_loss \
+                + args.reg_cnn_out * final_loss \
+                + args.reg_padding0 * padding0_loss \
+                + args.reg_padding1 * padding1_loss \
+                + args.reg_padding2 * padding2_loss \
+                + args.reg_padding3 * padding3_loss \
+                + args.reg_padding4 *padding4_loss
+                _backward(loss)
+        else:
         if not args.distributed:
             losses_m.update(loss.item() * accum_steps, input.size(0))
+            padding0_loss_m.update(padding0_loss_m.item() * accum_steps, input.size(0))
+            padding1_loss_m.update(padding1_loss_m.item() * accum_steps, input.size(0))
+            padding2_loss_m.update(padding2_loss_m.item() * accum_steps, input.size(0))
+            padding3_loss_m.update(padding3_loss_m.item() * accum_steps, input.size(0))
+            padding4_loss_m.update(padding4_loss_m.item() * accum_steps, input.size(0))
+            out_loss_m.update(out_loss_m.item() * accum_steps, input.size(0))
+            final_loss_m.update(final_loss_m.item() * accum_steps, input.size(0))
+            cls_loss_m.update(cls_loss_m.item() * accum_steps, input.size(0))
+            kl_loss_m.update(kl_loss_m.item() * accum_steps, input.size(0))
         update_sample_count += input.size(0)
 
         if not need_update:
@@ -1017,17 +1142,45 @@ def train_one_epoch(
             lr = sum(lrl) / len(lrl)
 
             if args.distributed:
-                reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
-                #padding_loss = utils.reduce_tensor(pad_loss.data, args.world_size)
-                losses_m.update(reduced_loss.item() * accum_steps, input.size(0))
-                #padding_m.update(padding_loss.item() * accum_steps, input.size(0))
+                #reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
+
+                reduced_padding0_loss = utils.reduce_tensor(padding0_loss.data, args.world_size)
+                reduced_padding1_loss = utils.reduce_tensor(padding1_loss.data, args.world_size)
+                reduced_padding2_loss = utils.reduce_tensor(padding2_loss.data, args.world_size)
+                reduced_padding3_loss = utils.reduce_tensor(padding3_loss.data, args.world_size)
+                reduced_padding4_loss = utils.reduce_tensor(padding4_loss.data, args.world_size)
+                reduced_out_loss = utils.reduce_tensor(out_loss.data, args.world_size)
+                reduced_final_loss = utils.reduce_tensor(final_loss.data, args.world_size)
+                reduced_cls_loss = utils.reduce_tensor(cls_loss.data, args.world_size)
+                reduced_kl_loss = utils.reduce_tensor(kl_loss.data, args.world_size)
+
+                #losses_m.update(reduced_loss.item() * accum_steps, input.size(0))
+                padding0_loss_m.update(reduced_padding0_loss.item() * accum_steps, input.size(0))
+                padding1_loss_m.update(reduced_padding1_loss.item() * accum_steps, input.size(0))
+                padding2_loss_m.update(reduced_padding2_loss.item() * accum_steps, input.size(0))
+                padding3_loss_m.update(reduced_padding3_loss.item() * accum_steps, input.size(0))
+                padding4_loss_m.update(reduced_padding4_loss.item() * accum_steps, input.size(0))
+                out_loss_m.update(reduced_out_loss.item() * accum_steps, input.size(0))
+                final_loss_m.update(reduced_final_loss.item() * accum_steps, input.size(0))
+                cls_loss_m.update(reduced_cls_loss.item() * accum_steps, input.size(0))
+                kl_loss_m.update(reduced_kl_loss.item() * accum_steps, input.size(0))
+
                 update_sample_count *= args.world_size
 
             if utils.is_primary(args):
                 _logger.info(
                     f'Train: {epoch} [{update_idx:>4d}/{updates_per_epoch} '
                     f'({100. * update_idx / (updates_per_epoch - 1):>3.0f}%)]  '
-                    f'Loss: {losses_m.val:#.3g} ({losses_m.avg:#.3g})  '
+                    f'Loss: {cls_loss_m.val:#.5g} ({cls_loss_m.avg:#.5g})  '
+                    f'padding0_loss: {padding0_loss_m.val:>2.5g} ({padding0_loss_m.avg:>2.5g})'
+                    f'padding1_loss: {padding1_loss_m.val:>2.5g} ({padding1_loss_m.avg:>2.5g})'
+                    f'padding2_loss: {padding2_loss_m.val:>2.5g} ({padding2_loss_m.avg:>2.5g})'
+                    f'padding3_loss: {padding3_loss_m.val:>2.5g} ({padding3_loss_m.avg:>2.5g})'
+                    f'padding4_loss: {padding4_loss_m.val:>2.5g} ({padding4_loss_m.avg:>2.5g})'
+                    f'out_loss: {out_loss_m.val:>2.5g} ({out_loss_m.avg:>2.5g})'
+                    f'final_loss: {final_loss_m.val:>2.5g} ({final_loss_m.avg:>2.5g})'
+                    f'cls_loss: {cls_loss_m.val:>2.5g} ({cls_loss_m.avg:>2.5g})'
+                    f'kl_loss: {kl_loss_m.val:>2.5g} ({kl_loss_m.avg:>2.5g})'
                     f'Time: {update_time_m.val:.3f}s, {update_sample_count / update_time_m.val:>7.2f}/s  '
                     f'({update_time_m.avg:.3f}s, {update_sample_count / update_time_m.avg:>7.2f}/s)  '
                     f'LR: {lr:.3e}  '
@@ -1056,7 +1209,9 @@ def train_one_epoch(
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
 
-    return OrderedDict([('loss', losses_m.avg), ('padding', padding_m.avg)])
+    return OrderedDict([
+        ('loss', losses_m.avg),
+        ])
 
 
 def validate(
@@ -1073,8 +1228,8 @@ def validate(
     top1_m = utils.AverageMeter()
     top5_m = utils.AverageMeter()
 
+    model.module.with_feat = None
     model.eval()
-
     end = time.time()
     last_idx = len(loader) - 1
     with torch.no_grad():
